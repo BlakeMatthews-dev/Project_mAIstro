@@ -1,0 +1,15 @@
+{
+  "name": "@maistro/copilot-proxy",
+  "version": "2026.2.16",
+  "private": true,
+  "description": "Maistro Copilot Proxy provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "maistro": "workspace:*"
+  },
+  "maistro": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

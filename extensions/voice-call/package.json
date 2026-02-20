@@ -1,0 +1,19 @@
+{
+  "name": "@maistro/voice-call",
+  "version": "2026.2.16",
+  "description": "Maistro voice-call plugin",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "maistro": "workspace:*"
+  },
+  "maistro": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

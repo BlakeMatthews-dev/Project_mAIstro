@@ -1,0 +1,15 @@
+{
+  "name": "@maistro/google-gemini-cli-auth",
+  "version": "2026.2.16",
+  "private": true,
+  "description": "Maistro Gemini CLI OAuth provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "maistro": "workspace:*"
+  },
+  "maistro": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

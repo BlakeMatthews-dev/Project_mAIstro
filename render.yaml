@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: maistro
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: SETUP_PASSWORD
+        sync: false
+      - key: MAISTRO_STATE_DIR
+        value: /data/.maistro
+      - key: MAISTRO_WORKSPACE_DIR
+        value: /data/workspace
+      - key: MAISTRO_GATEWAY_TOKEN
+        generateValue: true
+    disk:
+      name: maistro-data
+      mountPath: /data
+      sizeGB: 1

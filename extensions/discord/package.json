@@ -1,0 +1,14 @@
+{
+  "name": "@maistro/discord",
+  "version": "2026.2.16",
+  "description": "Maistro Discord channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "maistro": "workspace:*"
+  },
+  "maistro": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

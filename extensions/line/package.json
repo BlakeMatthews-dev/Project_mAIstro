@@ -1,0 +1,30 @@
+{
+  "name": "@maistro/line",
+  "version": "2026.2.16",
+  "private": true,
+  "description": "Maistro LINE channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "maistro": "workspace:*"
+  },
+  "maistro": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "line",
+      "label": "LINE",
+      "selectionLabel": "LINE (Messaging API)",
+      "docsPath": "/channels/line",
+      "docsLabel": "line",
+      "blurb": "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+      "order": 75,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@maistro/line",
+      "localPath": "extensions/line",
+      "defaultChoice": "npm"
+    }
+  }
+}

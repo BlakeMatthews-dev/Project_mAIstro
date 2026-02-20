@@ -1,0 +1,68 @@
+project_id: "example"
+project_dir: "/path/to/repo"
+obsidian_vault: "/path/to/obsidian-vault"
+gateway_url: "http://localhost:9090"
+inference_url: "http://localhost:8080"
+max_retries: 3
+accept_threshold: 7.0
+max_working_memory_tokens: 8000
+layer0_path: "./constraints.md"
+training_data_dir: "./data/training"
+exemplar_library_dir: "./data/exemplars"
+
+# ── Inference provider ─────────────────────────────────────────────
+# Options: "local" (default), "anthropic", "openai", "openrouter"
+#
+# "local" — runs Qwen3-Coder-Next via llama-server on your hardware.
+#            Requires VRAM/RAM. Best with 32GB+ unified or 2x 24GB GPU.
+#
+# "anthropic" — uses Claude API. No local GPU needed.
+# "openai"    — uses OpenAI API (also works for Azure OpenAI).
+# "openrouter" — uses OpenRouter to access any model via a single API key.
+#
+# When hardware is insufficient for local inference, the system will
+# recommend switching to an API provider at setup time.
+inference_provider: "local"
+
+# --- Anthropic (Claude) ---
+# inference_provider: "anthropic"
+# inference_api_key: "sk-ant-..."
+# inference_model: "claude-sonnet-4-5-20250929"
+# inference_max_tokens: 8192
+
+# --- OpenAI ---
+# inference_provider: "openai"
+# inference_api_key: "sk-..."
+# inference_api_base: "https://api.openai.com/v1"  # or Azure endpoint
+# inference_model: "gpt-4o"
+# inference_max_tokens: 4096
+
+# --- OpenRouter ---
+# inference_provider: "openrouter"
+# inference_api_key: "sk-or-..."
+# inference_api_base: "https://openrouter.ai/api/v1"
+# inference_model: "qwen/qwen3-coder"
+# inference_max_tokens: 4096
+
+# Vault sync — how to keep vault folder in sync with your machine.
+# Options: "local", "git", "syncthing", "couchdb"
+vault_sync_mode: "local"
+
+# --- CouchDB (Obsidian LiveSync) ---
+# vault_sync_mode: "couchdb"
+# vault_sync_couchdb_url: "http://localhost:5984"
+# vault_sync_couchdb_database: "obsidian"
+# vault_sync_couchdb_username: "admin"
+# vault_sync_couchdb_password: "password"
+# vault_sync_couchdb_conductor_prefix: "conductor/"
+
+# --- Git (obsidian-git plugin) ---
+# vault_sync_mode: "git"
+# vault_sync_git_remote: "origin"
+# vault_sync_git_branch: "main"
+
+# --- Syncthing ---
+# vault_sync_mode: "syncthing"
+# vault_sync_syncthing_api: "http://localhost:8384"
+# vault_sync_syncthing_api_key: "your-api-key"
+# vault_sync_syncthing_folder_id: "obsidian-vault"

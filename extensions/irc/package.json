@@ -1,0 +1,14 @@
+{
+  "name": "@maistro/irc",
+  "version": "2026.2.16",
+  "description": "Maistro IRC channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "maistro": "workspace:*"
+  },
+  "maistro": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
