@@ -1,0 +1,6 @@
+---
+
+## Error
+
+Artifact creation failed: Client error '401 Unauthorized' for url 'http://localhost:8100/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401

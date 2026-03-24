@@ -124,8 +124,12 @@ class Conductor:
             self._langfuse_tracer = None
 
         # Progress reporter — sends live status to the dashboard
+        # Strip /v1 suffix since ProgressReporter adds /v1/conductor/progress
+        _router_base = (config.routing_api_base or "http://localhost:8100").rstrip("/")
+        if _router_base.endswith("/v1"):
+            _router_base = _router_base[:-3]
         self._progress = ProgressReporter(
-            router_url=config.routing_api_base or "http://localhost:8100",
+            router_url=_router_base,
             api_key=config.routing_api_key,
         )
 

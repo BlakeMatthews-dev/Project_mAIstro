@@ -115,10 +115,21 @@ class RedTeamExercise:
                 )
 
             if self._board:
+                # Include attack summaries so the operator knows what was tested
+                attack_lines = []
+                for i, attack in enumerate(attacks, 1):
+                    # attack is a dict with "payload", "category", "technique" etc.
+                    category = attack.get("category", "unknown")
+                    technique = attack.get("technique", "")
+                    payload_preview = str(attack.get("payload", ""))[:80]
+                    attack_lines.append(f"  {i}. [{category}] {technique}: `{payload_preview}`")
+
+                attack_summary = "\n".join(attack_lines) if attack_lines else "  (no details available)"
+
                 self._board.observation(
                     f"Red team: all {len(attacks)} attacks blocked",
-                    f"Exercise #{self._exercise_count} — current defenses held against "
-                    f"all generated attack payloads.",
+                    f"Exercise #{self._exercise_count} — current defenses held.\n\n"
+                    f"**Attacks tested:**\n{attack_summary}",
                     source="red-team",
                 )
 

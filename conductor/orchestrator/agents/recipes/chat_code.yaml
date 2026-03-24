@@ -1,0 +1,15 @@
+name: chat.code
+role: coder
+description: "System prompt variants for code-related chat requests"
+prompt_name: chat.code
+prompt_variants:
+  - production
+  - concise
+  - chain-of-thought
+result_schema: null
+tools: []
+min_tier: 2
+temperature: 0.3
+max_tokens: 4096
+min_samples_before_selection: 30
+exploration_rate: 0.1
