@@ -145,7 +145,12 @@ class Spawner:
 
             # 5. Call the gateway
             if spec.parallel_generations > 1:
-                result = await self._call_ultra_think(spec, system_prompt, user_prompt)
+                # Cloud models: multi-model diversity (different providers, same prompt)
+                # Local models: same model, diverse sampling (Ultra Think)
+                if spec.model_override and spec.model_override.startswith("local/"):
+                    result = await self._call_ultra_think(spec, system_prompt, user_prompt)
+                else:
+                    result = await self._call_multi_model(spec, system_prompt, user_prompt)
             else:
                 result = await self._call_chat(spec, system_prompt, user_prompt)
 
@@ -389,6 +394,104 @@ class Spawner:
             "usage": {"output": total_tokens},
             "candidates": candidates,
             "timing": data.get("timing", {}),
+        }
+
+    async def _call_multi_model(
+        self, spec: AgentSpec, system_prompt: str, user_prompt: str
+    ) -> dict:
+        """Call N different cloud models in parallel with the same prompt.
+
+        Instead of Ultra Think's diverse sampling on one model, this sends
+        the same prompt to N different providers/models simultaneously.
+        Model diversity > sampling diversity for cloud providers.
+        """
+        import asyncio
+
+        n = spec.parallel_generations
+        # Pick N diverse models by using different model groups or explicit model IDs
+        # We'll use the conductor-router with model="auto" and let it pick,
+        # but force diversity by varying the priority signal
+        model_variants = [
+            "best",           # Frontier model
+            "fast",           # Speed-optimized model
+            "auto",           # Router's default pick
+            "coding",         # Code-specialized
+            "reasoning",      # Reasoning-specialized
+        ][:n]
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+
+        async def _call_one(model_group: str, idx: int) -> dict:
+            try:
+                payload = {
+                    "model": model_group,
+                    "messages": messages,
+                    "max_tokens": spec.max_tokens or 4096,
+                    "temperature": spec.temperature if spec.temperature is not None else 0.3,
+                }
+                if spec.langfuse_trace_id:
+                    payload["langfuse_trace_id"] = spec.langfuse_trace_id
+                payload["lane"] = spec.lane.value
+
+                client = await self._gateway_auth.gateway_client()
+                resp = await client.post("/v1/chat/completions", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                model_used = data.get("_routing", {}).get("router_model", model_group)
+                return {
+                    "idx": idx,
+                    "model_group": model_group,
+                    "model_used": model_used,
+                    "content": content,
+                    "tokens": data.get("usage", {}).get("total_tokens", 0),
+                }
+            except Exception as exc:
+                logger.warning("Multi-model call %d (%s) failed: %s", idx, model_group, exc)
+                return {"idx": idx, "model_group": model_group, "content": "", "error": str(exc)}
+
+        # Fire all N calls in parallel
+        tasks = [_call_one(mg, i) for i, mg in enumerate(model_variants)]
+        results = await asyncio.gather(*tasks)
+
+        # Filter successful results
+        successful = [r for r in results if r.get("content")]
+        if not successful:
+            return {"content": "", "model": None, "usage": {}}
+
+        if len(successful) == 1:
+            return {
+                "content": successful[0]["content"],
+                "model": successful[0].get("model_used"),
+                "usage": {"output": successful[0].get("tokens", 0)},
+            }
+
+        # Multiple candidates: serialize for reviewer
+        content = json.dumps(
+            [{
+                "idx": r["idx"],
+                "model": r.get("model_used", r["model_group"]),
+                "content": r["content"],
+            } for r in successful],
+            indent=2,
+        )
+
+        total_tokens = sum(r.get("tokens", 0) for r in successful)
+        logger.info(
+            "Multi-model: %d/%d succeeded (%s)",
+            len(successful), len(results),
+            ", ".join(r.get("model_used", "?") for r in successful),
+        )
+
+        return {
+            "content": content,
+            "model": None,
+            "usage": {"output": total_tokens},
+            "candidates": successful,
         }
 
     # ------------------------------------------------------------------
