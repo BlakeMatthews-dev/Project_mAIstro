@@ -51,7 +51,7 @@ from .memory.knowledge_graph import KnowledgeGraph
 from .memory.layer0 import Layer0
 from .memory.layer1 import Layer1
 from .memory.layer2 import Layer2
-from .planner import Planner
+from .planner import Plan, Planner, Subtask
 from .progress import ProgressReporter
 from .reviewer import Reviewer
 from .tools.file_ops import FileOps
@@ -67,6 +67,8 @@ console = Console()
 
 
 class Conductor:
+    _EXECUTION_MODE = "micro-build"
+
     def __init__(self, config: OrchestratorConfig) -> None:
         self._config = config
 
@@ -439,17 +441,75 @@ class Conductor:
 
             # Build full context
             context = self._build_context()
+            context_dict = {
+                "layer0": self._layer0.build_prompt_section(),
+                "layer1": self._layer1.build_prompt_section(),
+                "layer2": self._layer2.build_prompt_section(),
+                "knowledge": self._knowledge.build_prompt_section(),
+            }
 
             # Step 1: Plan
             await self._progress.update(task_id, "planning", filename=filename, current_step="Decomposing task into subtasks")
             console.print("  [dim]Planning...[/]")
-            plan = await self._planner.decompose(task_id, effective_task, context)
+            planner_spec = AgentSpec(
+                role=AgentRole.PLANNER,
+                task_id=task_id,
+                subtask_id=f"{task_id}-plan",
+                description=effective_task,
+                context=context_dict,
+                recipe_name="planner.decompose",
+                tier=2,
+                lane=lane,
+                langfuse_trace_id=langfuse_trace_id,
+                prompt_variables={
+                    "execution_mode": self._EXECUTION_MODE,
+                },
+            )
+            planner_output = await self._spawner.spawn(planner_spec)
+            plan = self._plan_from_spawn_output(task_id, effective_task, planner_output.output_parsed)
+            if plan is None and planner_output.output:
+                plan = self._planner._parse_plan(task_id, effective_task, planner_output.output)
+            if plan is None:
+                plan = await self._planner.decompose(task_id, effective_task, context)
             self._layer1.start_task(effective_task, plan.summary)
 
             for st in plan.subtasks:
                 self._layer1.add_subtask(st.subtask_id, st.description)
 
             console.print(f"  Plan: {len(plan.subtasks)} subtasks")
+
+            architecture_notes = ""
+            checkpoint_allowed_files: list[str] = []
+            checkpoint_non_goals = ""
+            checkpoint_invariants = ""
+            checkpoint_review_focus = ""
+            checkpoint_test_focus = ""
+            architect_spec = AgentSpec(
+                role=AgentRole.ARCHITECT,
+                task_id=task_id,
+                subtask_id=f"{task_id}-architect",
+                description=f"Architect the next checkpoint for: {effective_task}",
+                context=context_dict,
+                upstream_outputs={
+                    "planner": planner_output.output or plan.summary,
+                },
+                recipe_name="architect.checkpoint",
+                tier=2,
+                lane=lane,
+                langfuse_trace_id=langfuse_trace_id,
+                prompt_variables={
+                    "execution_mode": self._EXECUTION_MODE,
+                },
+            )
+            architect_output = await self._spawner.spawn(architect_spec)
+            if architect_output.success:
+                architecture_notes = architect_output.output or ""
+                arch_data = architect_output.output_parsed or {}
+                checkpoint_allowed_files = list(arch_data.get("allowed_files", []))
+                checkpoint_non_goals = "; ".join(arch_data.get("non_goals", [])) or "(none)"
+                checkpoint_invariants = "; ".join(arch_data.get("invariants", [])) or "(none)"
+                checkpoint_review_focus = "; ".join(arch_data.get("review_focus", [])) or "(none)"
+                checkpoint_test_focus = "; ".join(arch_data.get("test_focus", [])) or "(none)"
 
             # Step 2: Execute each subtask (via spawner for tracing + contracts)
             all_passed = True
@@ -467,6 +527,12 @@ class Conductor:
                     tier=subtask.tier,
                     langfuse_trace_id=langfuse_trace_id,
                     plan_summary=plan.summary,
+                    architecture_notes=architecture_notes,
+                    allowed_files=checkpoint_allowed_files or subtask.files_likely,
+                    non_goals=checkpoint_non_goals,
+                    invariants=checkpoint_invariants,
+                    review_focus=checkpoint_review_focus,
+                    test_focus=checkpoint_test_focus,
                     lane=lane,
                 )
                 if not success:
@@ -862,6 +928,12 @@ class Conductor:
         tier: int,
         langfuse_trace_id: str | None = None,
         plan_summary: str = "",
+        architecture_notes: str = "",
+        allowed_files: list[str] | None = None,
+        non_goals: str = "(none)",
+        invariants: str = "(none)",
+        review_focus: str = "(none)",
+        test_focus: str = "(none)",
         lane: Lane = Lane.BACKGROUND,
     ) -> bool:
         """Execute a subtask via the spawner (coder → reviewer pipeline).
@@ -898,6 +970,16 @@ class Conductor:
                 tier=tier,
                 parallel_generations=tier if tier <= 3 else 1,
                 exemplar_task_type=self._classify_task(description),
+                prompt_variables={
+                    "execution_mode": self._EXECUTION_MODE,
+                    "checkpoint_goal": description,
+                    "allowed_files": ", ".join(allowed_files or []) or "(not specified)",
+                    "architecture_notes": architecture_notes or "(none)",
+                    "non_goals": non_goals,
+                    "invariants": invariants,
+                    "test_focus": test_focus,
+                },
+                write_scopes=list(allowed_files or []),
                 lane=lane,
                 langfuse_trace_id=langfuse_trace_id,
             )
@@ -918,6 +1000,45 @@ class Conductor:
                 console.print("    [red]Coder returned empty output[/]")
                 continue
 
+            # Apply the code
+            applied = self._apply_candidate(coder_output.output)
+            if not applied:
+                self._layer1.add_feedback("Candidate applied no changes or used an invalid patch format")
+                if tier < 3:
+                    tier += 1
+                continue
+
+            # Run lint/static checks before tests
+            lint_result = await self._lint_runner.run(self._config.lint_command or None)
+            console.print(
+                f"    Lint: {'PASS' if lint_result.success else 'FAIL'} "
+                f"({lint_result.framework})"
+            )
+            lint_summary = lint_result.output[:200] or (
+                "Lint/static checks passed" if lint_result.success else "Lint/static checks failed"
+            )
+
+            # Run tests
+            if lint_result.success:
+                test_result = await self._test_runner.run()
+            else:
+                from types import SimpleNamespace
+                test_result = SimpleNamespace(
+                    success=False,
+                    framework="not-run",
+                    output="Tests not run because lint failed",
+                    tests_passed=0,
+                    tests_failed=0,
+                    tests_total=0,
+                )
+            console.print(
+                f"    Tests: {'PASS' if test_result.success else 'FAIL'} "
+                f"({test_result.tests_passed}/{test_result.tests_total})"
+            )
+            test_summary = test_result.output[:200] or (
+                "Tests passed" if test_result.success else "Tests failed"
+            )
+
             # --- Reviewer agent ---
             reviewer_spec = AgentSpec(
                 role=AgentRole.REVIEWER,
@@ -928,7 +1049,24 @@ class Conductor:
                 context=context_dict,
                 upstream_outputs={
                     "planner": plan_summary,
+                    "architect": architecture_notes,
                     "coder": coder_output.output,
+                    "lint": lint_summary,
+                    "tests": test_summary,
+                },
+                prompt_variables={
+                    "execution_mode": self._EXECUTION_MODE,
+                    "checkpoint_goal": description,
+                    "architecture_notes": architecture_notes or "(none)",
+                    "invariants": invariants,
+                    "review_focus": review_focus,
+                    "test_focus": test_focus,
+                    "allowed_files": ", ".join(allowed_files or []) or "(not specified)",
+                    "lint_summary": lint_summary,
+                    "test_summary": test_summary,
+                    "typecheck_summary": "(not run)",
+                    "bandit_summary": "(not run)",
+                    "gitleaks_summary": "(not run)",
                 },
                 tier=min(tier, 2),  # reviewer doesn't need high tier
                 lane=lane,
@@ -955,6 +1093,18 @@ class Conductor:
                 f"({reviewer_output.duration_ms:.0f}ms)"
             )
 
+            if not lint_result.success:
+                self._layer1.add_feedback(f"Lint failed: {lint_summary}")
+                if tier < 3:
+                    tier += 1
+                continue
+
+            if not test_result.success:
+                self._layer1.add_feedback(f"Tests failed: {test_summary}")
+                if tier < 3:
+                    tier += 1
+                continue
+
             # Check threshold
             if selected_score < self._reviewer.accept_threshold:
                 console.print(f"    [yellow]Below threshold ({self._reviewer.accept_threshold})[/]")
@@ -964,34 +1114,6 @@ class Conductor:
                     tier += 1
                     console.print(f"    Escalating to Tier {tier}")
                 continue
-
-            # Apply the code
-            applied = self._apply_candidate(coder_output.output)
-            if not applied:
-                self._layer1.add_feedback("Candidate applied no changes or used an invalid patch format")
-                if tier < 3:
-                    tier += 1
-                continue
-
-            # Run lint/static checks before tests
-            lint_result = await self._lint_runner.run(self._config.lint_command or None)
-            console.print(
-                f"    Lint: {'PASS' if lint_result.success else 'FAIL'} "
-                f"({lint_result.framework})"
-            )
-            if not lint_result.success:
-                lint_summary = lint_result.output[:200] or "Lint/static checks failed"
-                self._layer1.add_feedback(f"Lint failed: {lint_summary}")
-                if tier < 3:
-                    tier += 1
-                continue
-
-            # Run tests
-            test_result = await self._test_runner.run()
-            console.print(
-                f"    Tests: {'PASS' if test_result.success else 'FAIL'} "
-                f"({test_result.tests_passed}/{test_result.tests_total})"
-            )
 
             if test_result.success:
                 # Record changelog
@@ -1041,14 +1163,50 @@ class Conductor:
                 self._layer1.complete_subtask(subtask_id, coder_output.output[:100])
                 return True
 
-            # Test failed — add feedback and retry
-            self._layer1.add_feedback(f"Tests failed: {test_result.output[:200]}")
-            if tier < 3:
-                tier += 1
-
         # All retries exhausted
         self._layer1.fail_subtask(subtask_id, "Max retries exhausted")
         return False
+
+    # ------------------------------------------------------------------
+    # Planning helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _plan_from_spawn_output(task_id: str, task_text: str, parsed: dict | None) -> Plan | None:
+        """Convert typed planner output into the legacy Plan shape."""
+        if not parsed:
+            return None
+
+        subtasks: list[Subtask] = []
+        estimated_tiers = parsed.get("estimated_tiers", [])
+        for i, item in enumerate(parsed.get("subtasks", [])):
+            if not isinstance(item, dict):
+                continue
+            tier = 2
+            if i < len(estimated_tiers):
+                try:
+                    tier = int(estimated_tiers[i])
+                except (TypeError, ValueError):
+                    tier = 2
+            subtasks.append(
+                Subtask(
+                    subtask_id=item.get("id", f"{task_id}-{i + 1}"),
+                    description=item.get("description", task_text),
+                    tier=tier,
+                    dependencies=item.get("depends_on", []),
+                    files_likely=item.get("files_likely", []),
+                )
+            )
+
+        if not subtasks:
+            return None
+
+        return Plan(
+            task_id=task_id,
+            original_request=task_text,
+            subtasks=subtasks,
+            summary=parsed.get("reasoning", "") or task_text[:100],
+        )
 
     # ------------------------------------------------------------------
     # Context assembly

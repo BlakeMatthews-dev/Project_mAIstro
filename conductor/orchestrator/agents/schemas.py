@@ -182,6 +182,39 @@ class ArchitectNewFile(BaseModel):
 ArchitectOutput.model_rebuild()
 
 
+class CheckpointArchitectureOutput(BaseModel):
+    """Structured output from the architect for normal coding checkpoints."""
+
+    checkpoint_goal: str = Field(
+        default="",
+        description="What this checkpoint is trying to complete before review",
+    )
+    allowed_files: list[str] = Field(
+        default_factory=list,
+        description="Files or paths the builder should stay within for this checkpoint",
+    )
+    non_goals: list[str] = Field(
+        default_factory=list,
+        description="Things explicitly out of scope for the current checkpoint",
+    )
+    invariants: list[str] = Field(
+        default_factory=list,
+        description="Constraints that must remain true while building",
+    )
+    review_focus: list[str] = Field(
+        default_factory=list,
+        description="What reviewers should pay extra attention to",
+    )
+    test_focus: list[str] = Field(
+        default_factory=list,
+        description="Tests or behaviors that should provide evidence before advancing",
+    )
+    summary: str = Field(default="", description="Brief architecture guidance")
+
+
+CheckpointArchitectureOutput.model_rebuild()
+
+
 # ── Extractor: file transformation ────────────────────────────────
 
 class ExtractorOutput(BaseModel):
@@ -236,6 +269,7 @@ SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "schemas.ScoutOutput": ScoutOutput,
     "schemas.ScoutFile": ScoutFile,
     "schemas.ArchitectOutput": ArchitectOutput,
+    "schemas.CheckpointArchitectureOutput": CheckpointArchitectureOutput,
     "schemas.ArchitectMapping": ArchitectMapping,
     "schemas.ArchitectNewFile": ArchitectNewFile,
     "schemas.ExtractorOutput": ExtractorOutput,

@@ -1,0 +1,16 @@
+name: architect.checkpoint
+role: architect
+description: "Design a small, reviewable checkpoint for normal coding work"
+prompt_name: architect.checkpoint
+prompt_variants:
+  - production
+result_schema: schemas.CheckpointArchitectureOutput
+tools:
+  - file_ops.read
+  - file_ops.list
+min_tier: 2
+max_tier: 3
+temperature: 0.3
+max_tokens: 1536
+min_samples_before_selection: 20
+exploration_rate: 0.1

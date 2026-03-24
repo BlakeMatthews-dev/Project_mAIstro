@@ -190,6 +190,17 @@ def conductor(config):
     c._planner = MagicMock()
     c._planner.decompose = AsyncMock()
     c._planner.close = AsyncMock()
+    c._architect = MagicMock()
+    c._architect.design = AsyncMock(return_value={
+        "checkpoint_goal": "Keep the change narrow",
+        "allowed_files": [],
+        "non_goals": [],
+        "invariants": [],
+        "review_focus": [],
+        "test_focus": [],
+        "summary": "Prefer a tiny checkpoint.",
+    })
+    c._architect.close = AsyncMock()
     c._coder = MagicMock()
     c._coder.generate = AsyncMock()
     c._coder.close = AsyncMock()
@@ -245,13 +256,79 @@ def conductor(config):
     c._progress = MagicMock()
     c._progress.update = AsyncMock()
     c._progress.close = AsyncMock()
+    c._archaeologist = MagicMock()
+    c._archaeologist.autopsy = AsyncMock(return_value=None)
 
     # Mock spawner — bridges to the mocked _coder and _reviewer so existing
     # test patterns (setting _coder.generate, _reviewer.review) still work.
     from orchestrator.agents.agent_spec import AgentOutput, AgentRole
 
     async def _mock_spawn(spec):
-        if spec.role == AgentRole.CODER:
+        if spec.role == AgentRole.PLANNER:
+            try:
+                plan_result = await c._planner.decompose(
+                    spec.task_id,
+                    spec.description,
+                    "",
+                )
+                parsed = {
+                    "subtasks": [
+                        {
+                            "id": st.subtask_id,
+                            "description": st.description,
+                            "depends_on": st.dependencies,
+                            "files_likely": st.files_likely,
+                        }
+                        for st in plan_result.subtasks
+                    ],
+                    "estimated_tiers": [st.tier for st in plan_result.subtasks],
+                    "reasoning": plan_result.summary,
+                }
+                return AgentOutput(
+                    agent_id=spec.agent_id, role=spec.role,
+                    task_id=spec.task_id, subtask_id=spec.subtask_id,
+                    success=True,
+                    output=json.dumps(parsed),
+                    output_parsed=parsed,
+                    model_used="test-model", tier_used=spec.tier,
+                )
+            except Exception as exc:
+                return AgentOutput(
+                    agent_id=spec.agent_id, role=spec.role,
+                    task_id=spec.task_id, subtask_id=spec.subtask_id,
+                    success=False, error=str(exc),
+                )
+        elif spec.role == AgentRole.ARCHITECT:
+            try:
+                arch_result = await c._architect.design(
+                    task_id=spec.task_id,
+                    description=spec.description,
+                    upstream=spec.upstream_outputs,
+                )
+                output = arch_result if isinstance(arch_result, dict) else {
+                    "checkpoint_goal": "",
+                    "allowed_files": [],
+                    "non_goals": [],
+                    "invariants": [],
+                    "review_focus": [],
+                    "test_focus": [],
+                    "summary": str(arch_result),
+                }
+                return AgentOutput(
+                    agent_id=spec.agent_id, role=spec.role,
+                    task_id=spec.task_id, subtask_id=spec.subtask_id,
+                    success=True,
+                    output=json.dumps(output),
+                    output_parsed=output,
+                    model_used="test-model", tier_used=spec.tier,
+                )
+            except Exception as exc:
+                return AgentOutput(
+                    agent_id=spec.agent_id, role=spec.role,
+                    task_id=spec.task_id, subtask_id=spec.subtask_id,
+                    success=False, error=str(exc),
+                )
+        elif spec.role == AgentRole.CODER:
             # Delegate to mocked coder
             try:
                 coder_result = await c._coder.generate(
@@ -569,7 +646,7 @@ class TestDeterministicEvidenceGates:
         await conductor._process_task("task.md", "Make a valid change")
 
         assert conductor._coder.generate.await_count == 2
-        assert conductor._reviewer.review.await_count == 2
+        assert conductor._reviewer.review.await_count == 1
         assert conductor._lint_runner.run.await_count == 1
         assert conductor._test_runner.run.await_count == 1
         conductor._watcher.write_completed.assert_awaited_once()
@@ -608,6 +685,42 @@ class TestDeterministicEvidenceGates:
         conductor._watcher.write_completed.assert_awaited_once()
         feedback_calls = [call.args[0] for call in conductor._layer1.add_feedback.call_args_list]
         assert any("Lint failed:" in message for message in feedback_calls)
+
+    async def test_reviewer_receives_deterministic_evidence_vars(self, conductor):
+        """Reviewer prompt variables include lint/test evidence summaries."""
+        conductor._planner.decompose.return_value = _make_plan(tier=1)
+        conductor._coder.generate.return_value = _make_coder_result()
+        conductor._reviewer.review.return_value = _make_review(score=8.0)
+        conductor._lint_runner.run.return_value = MagicMock(
+            success=True,
+            framework="ruff",
+            output="All checks passed",
+            issues_found=0,
+            warnings_found=0,
+        )
+        conductor._test_runner.run.return_value = _make_test_result(success=True)
+
+        from orchestrator.agents.agent_spec import AgentRole
+
+        seen: list[dict] = []
+        original_spawn = conductor._spawner.spawn
+
+        async def capture_spawn(spec):
+            if spec.role == AgentRole.REVIEWER:
+                seen.append(dict(spec.prompt_variables))
+            return await original_spawn(spec)
+
+        conductor._spawner.spawn = AsyncMock(side_effect=capture_spawn)
+
+        await conductor._process_task("task.md", "Add a hello function")
+
+        assert seen
+        reviewer_vars = seen[-1]
+        assert reviewer_vars["lint_summary"] == "All checks passed"
+        assert reviewer_vars["test_summary"] == "5 passed"
+        assert reviewer_vars["typecheck_summary"] == "(not run)"
+        assert reviewer_vars["bandit_summary"] == "(not run)"
+        assert reviewer_vars["gitleaks_summary"] == "(not run)"
 
 
 # ------------------------------------------------------------------
