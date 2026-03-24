@@ -38,6 +38,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Host Health API for auto-remediation
+HOST_HEALTH_URL = os.getenv("HOST_HEALTH_URL", "http://localhost:8150")
+HOST_HEALTH_TOKEN = os.getenv("HOST_HEALTH_TOKEN", "sk-host-health-2026")
+
+# HA notification for escalation
+HA_URL = os.getenv("HA_URL", "http://10.10.42.174:8123")
+HA_TOKEN = os.getenv("HA_TOKEN", "")
+
 
 class Heartbeat:
     """Autonomous heartbeat loop — periodic evaluation and action."""
@@ -309,6 +317,41 @@ class Heartbeat:
             except Exception as exc:
                 logger.debug("Model Arena init failed (will retry): %s", exc)
 
+        # 12. Morning digest — send personalized briefings at scheduled times
+        #     Blake at 05:45 CDT, Lilly at 07:20 CDT
+        local_now = datetime.now()  # system time is CDT
+        current_hhmm = local_now.strftime("%H:%M")
+        if not hasattr(self, "_digest_sent_today"):
+            self._digest_sent_today: set[str] = set()
+        # Reset tracking at midnight
+        if current_hhmm == "00:00":
+            self._digest_sent_today.clear()
+
+        digest_schedules = {"blake": "05:45", "lilly": "07:20"}
+        for user_id, sched_time in digest_schedules.items():
+            if current_hhmm == sched_time and user_id not in self._digest_sent_today:
+                try:
+                    import httpx as _httpx
+                    async with _httpx.AsyncClient(timeout=30) as client:
+                        resp = await client.post(
+                            f"http://localhost:8100/v1/digest/send/{user_id}",
+                            headers={"Authorization": f"Bearer {os.environ.get('ROUTER_API_KEY', '')}"},
+                        )
+                    self._digest_sent_today.add(user_id)
+                    actions_taken += 1
+                    logger.info("Morning digest sent to %s (status=%d)", user_id, resp.status_code)
+                except Exception as exc:
+                    logger.warning("Morning digest failed for %s: %s", user_id, exc)
+
+        # 13. Auto-remediation — fix common issues detected by infra health checks
+        #     Runs every 15th cycle (~15min) using the host health API
+        if self._cycle_count % 15 == 0 and self._cycle_count > 0:
+            try:
+                await self._auto_remediate()
+                actions_taken += 1
+            except Exception as exc:
+                logger.debug("Auto-remediation failed: %s", exc)
+
         # Commit evolution history
         if self._evolution:
             elapsed_ms = (time.monotonic() - start) * 1000
@@ -426,6 +469,110 @@ class Heartbeat:
 
         return result
 
+    async def _auto_remediate(self) -> None:
+        """Auto-fix common issues via the Host Health API.
+
+        Checks system health and takes safe corrective actions:
+        - Disk >80%: prune unused Docker images
+        - Container down: restart it (if in allowlist)
+        - GPU >80C: log warning (throttling is hardware-managed)
+        """
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"{HOST_HEALTH_URL}/full",
+                    headers={"Authorization": f"Bearer {HOST_HEALTH_TOKEN}"},
+                )
+            if resp.status_code != 200:
+                return
+
+            data = resp.json()
+            remediations = []
+
+            # Check disk usage — auto-prune if >80%
+            for mount in data.get("storage", {}).get("mounts", []):
+                use_str = mount.get("use_pct", "0%").rstrip("%")
+                try:
+                    use_pct = int(use_str)
+                except (ValueError, TypeError):
+                    continue
+                if use_pct > 80 and mount.get("mount") in ("/", "/vmpool"):
+                    async with httpx.AsyncClient(timeout=120) as client:
+                        prune_resp = await client.post(
+                            f"{HOST_HEALTH_URL}/action/docker_prune",
+                            json={},
+                            headers={"Authorization": f"Bearer {HOST_HEALTH_TOKEN}",
+                                     "Content-Type": "application/json"},
+                        )
+                    if prune_resp.status_code == 200:
+                        remediations.append(
+                            f"Docker prune ({mount['mount']} at {use_pct}%): "
+                            f"{prune_resp.json().get('detail', '')[:100]}"
+                        )
+                    break
+
+            # Check for unhealthy containers — auto-restart
+            for name in data.get("docker", {}).get("unhealthy", []):
+                async with httpx.AsyncClient(timeout=30) as client:
+                    restart_resp = await client.post(
+                        f"{HOST_HEALTH_URL}/action/restart_container",
+                        json={"name": name},
+                        headers={"Authorization": f"Bearer {HOST_HEALTH_TOKEN}",
+                                 "Content-Type": "application/json"},
+                    )
+                if restart_resp.status_code == 200:
+                    remediations.append(f"Restarted container: {name}")
+
+            # Check GPU temperature
+            for gpu in data.get("gpu", {}).get("gpus", []):
+                temp = gpu.get("temp_c", 0)
+                if isinstance(temp, (int, float)) and temp > 80:
+                    remediations.append(f"GPU {gpu.get('name', '?')} at {temp}C")
+
+            if remediations:
+                logger.info("Auto-remediation: %s", "; ".join(remediations))
+                if self._board:
+                    self._board.observation(
+                        f"Auto-remediation: {len(remediations)} action(s)",
+                        "\n".join(f"- {r}" for r in remediations),
+                        source="heartbeat/auto-remediate",
+                    )
+                await self._push_notification(
+                    f"Auto-fix: {len(remediations)} action(s)",
+                    "\n".join(remediations),
+                )
+
+        except Exception as exc:
+            logger.debug("Auto-remediation check failed: %s", exc)
+
+    async def _push_notification(self, title: str, message: str, target: str = "blake") -> None:
+        """Send a push notification to a phone via Home Assistant."""
+        if not HA_URL or not HA_TOKEN:
+            return
+        target_map = {
+            "blake": "notify/mobile_app_blakes_iphone",
+            "bella": "notify/mobile_app_bellas_iphone",
+            "lilly": "notify/mobile_app_lillys_iphone",
+        }
+        service = target_map.get(target)
+        if not service:
+            return
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(
+                    f"{HA_URL}/api/services/{service}",
+                    json={"message": message, "title": title},
+                    headers={
+                        "Authorization": f"Bearer {HA_TOKEN}",
+                        "Content-Type": "application/json",
+                    },
+                )
+        except Exception as exc:
+            logger.debug("Push notification failed: %s", exc)
+
     async def _check_infrastructure_health(self) -> dict:
         """Check disk, GPU, container health."""
         import subprocess as sp
@@ -488,6 +635,13 @@ class Heartbeat:
                 "\n".join(f"- {f}" for f in findings),
                 source="heartbeat/infra-check",
             )
+            # Push critical alerts to phone
+            warns = [f for f in findings if f.startswith("WARN")]
+            if warns:
+                await self._push_notification(
+                    "Infra Alert",
+                    "\n".join(warns),
+                )
 
         return {
             "executed": True,

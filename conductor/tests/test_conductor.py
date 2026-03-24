@@ -201,6 +201,14 @@ def conductor(config):
     # Mock tools
     c._file_ops = MagicMock()
     c._file_ops.write = MagicMock(return_value=MagicMock(success=True))
+    c._lint_runner = MagicMock()
+    c._lint_runner.run = AsyncMock(return_value=MagicMock(
+        success=True,
+        framework="none",
+        output="",
+        issues_found=0,
+        warnings_found=0,
+    ))
     c._test_runner = MagicMock()
     c._test_runner.run = AsyncMock(return_value=_make_test_result())
 
@@ -540,6 +548,66 @@ class TestNoCandidates:
         # Reviewer only called once (skipped when no candidates)
         assert conductor._reviewer.review.await_count == 1
         conductor._watcher.write_completed.assert_awaited_once()
+
+
+# ------------------------------------------------------------------
+# Deterministic evidence gates
+# ------------------------------------------------------------------
+
+
+class TestDeterministicEvidenceGates:
+    async def test_invalid_candidate_retries_before_lint_or_tests(self, conductor):
+        """No-op/invalid candidate output retries and does not reach lint/tests."""
+        conductor._planner.decompose.return_value = _make_plan(tier=1)
+        conductor._reviewer.review.return_value = _make_review(score=8.0)
+        conductor._coder.generate.side_effect = [
+            _make_coder_result(candidates=[_make_candidate(content="not a patch")]),
+            _make_coder_result(),
+        ]
+        conductor._layer1.add_feedback = MagicMock()
+
+        await conductor._process_task("task.md", "Make a valid change")
+
+        assert conductor._coder.generate.await_count == 2
+        assert conductor._reviewer.review.await_count == 2
+        assert conductor._lint_runner.run.await_count == 1
+        assert conductor._test_runner.run.await_count == 1
+        conductor._watcher.write_completed.assert_awaited_once()
+        feedback_calls = [call.args[0] for call in conductor._layer1.add_feedback.call_args_list]
+        assert any("invalid patch format" in message for message in feedback_calls)
+
+    async def test_lint_failure_retries_before_tests(self, conductor):
+        """Lint failure blocks tests on that attempt and retries with feedback."""
+        conductor._planner.decompose.return_value = _make_plan(tier=1)
+        conductor._coder.generate.return_value = _make_coder_result()
+        conductor._reviewer.review.return_value = _make_review(score=8.0)
+        conductor._layer1.add_feedback = MagicMock()
+        conductor._lint_runner.run.side_effect = [
+            MagicMock(
+                success=False,
+                framework="ruff",
+                output="E999 syntax error",
+                issues_found=1,
+                warnings_found=0,
+            ),
+            MagicMock(
+                success=True,
+                framework="ruff",
+                output="",
+                issues_found=0,
+                warnings_found=0,
+            ),
+        ]
+
+        await conductor._process_task("task.md", "Fix lint issues")
+
+        assert conductor._coder.generate.await_count == 2
+        assert conductor._reviewer.review.await_count == 2
+        assert conductor._lint_runner.run.await_count == 2
+        assert conductor._test_runner.run.await_count == 1
+        conductor._watcher.write_completed.assert_awaited_once()
+        feedback_calls = [call.args[0] for call in conductor._layer1.add_feedback.call_args_list]
+        assert any("Lint failed:" in message for message in feedback_calls)
 
 
 # ------------------------------------------------------------------

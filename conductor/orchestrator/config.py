@@ -17,6 +17,7 @@ class OrchestratorConfig(BaseModel):
     max_retries: int = 3
     accept_threshold: float = 7.0
     max_working_memory_tokens: int = 8000
+    lint_command: str = ""
     layer0_path: str = "./constraints.md"
     training_data_dir: str = "./data/training"
     exemplar_library_dir: str = "./data/exemplars"

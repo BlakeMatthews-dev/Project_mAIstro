@@ -17,10 +17,12 @@ import asyncio
 import os
 import textwrap
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from orchestrator.tools.file_ops import FileOps, FileOpResult, _apply_hunk
+from orchestrator.tools.lint_runner import LintRunner, LintResult
 from orchestrator.tools.shell import Shell, ShellResult, BLOCKED_PATTERNS, MAX_OUTPUT_BYTES
 from orchestrator.tools.test_runner import TestRunner, TestResult
 from orchestrator.tools.git import Git, GitResult
@@ -569,6 +571,76 @@ class TestTestRunnerRun:
         runner = TestRunner(str(tmp_path))
         result = await runner.run(command=f"python3 {script}")
         assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# LintRunner
+# ---------------------------------------------------------------------------
+
+
+class TestLintRunnerFrameworkDetection:
+    def test_detects_npm_lint_script(self, tmp_path: Path):
+        (tmp_path / "package.json").write_text(
+            '{"scripts":{"lint":"eslint .","test":"vitest"}}',
+            encoding="utf-8",
+        )
+        runner = LintRunner(str(tmp_path))
+        framework, cmd = runner._detect_framework()
+        assert framework == "node"
+        assert cmd == "npm run lint --if-present"
+
+    def test_detects_ruff_from_pyproject(self, tmp_path: Path):
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.ruff]\nline-length = 100\n',
+            encoding="utf-8",
+        )
+        runner = LintRunner(str(tmp_path))
+        framework, cmd = runner._detect_framework()
+        assert framework == "ruff"
+        assert cmd == "python -m ruff check ."
+
+    def test_no_framework_returns_empty(self, tmp_path: Path):
+        runner = LintRunner(str(tmp_path))
+        framework, cmd = runner._detect_framework()
+        assert framework == ""
+        assert cmd == ""
+
+
+class TestLintRunnerRun:
+    async def test_no_framework_detected_returns_successful_noop(self, tmp_path: Path):
+        runner = LintRunner(str(tmp_path))
+        result = await runner.run()
+        assert result.success is True
+        assert result.framework == "none"
+        assert result.issues_found == 0
+
+    async def test_custom_command(self, tmp_path: Path):
+        runner = LintRunner(str(tmp_path))
+        runner._shell = MagicMock()
+        runner._shell.run = AsyncMock(return_value=ShellResult(
+            success=True,
+            command="python -m ruff check .",
+            stdout="All checks passed!",
+            stderr="",
+            return_code=0,
+        ))
+        result = await runner.run("python -m ruff check .")
+        assert result.success is True
+        assert result.framework == "custom"
+
+    async def test_failure_counts_issues(self, tmp_path: Path):
+        runner = LintRunner(str(tmp_path))
+        runner._shell = MagicMock()
+        runner._shell.run = AsyncMock(return_value=ShellResult(
+            success=False,
+            command="python -m ruff check .",
+            stdout="file.py:1:1: F401 unused import\nfile.py:2:1: F821 undefined name\n",
+            stderr="",
+            return_code=1,
+        ))
+        result = await runner._run_command("python -m ruff check .", "ruff")
+        assert result.success is False
+        assert result.issues_found >= 2
 
 
 # ---------------------------------------------------------------------------

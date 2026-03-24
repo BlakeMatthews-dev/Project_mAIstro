@@ -56,6 +56,7 @@ from .progress import ProgressReporter
 from .reviewer import Reviewer
 from .tools.file_ops import FileOps
 from .tools.git import Git
+from .tools.lint_runner import LintRunner
 from .tools.shell import Shell
 from .tools.test_runner import TestRunner
 from .training.data_collector import CandidateRecord, DataCollector, TrainingRow
@@ -106,6 +107,7 @@ class Conductor:
         self._file_ops = FileOps(config.project_dir)
         self._shell = Shell(config.project_dir)
         self._git = Git(config.project_dir)
+        self._lint_runner = LintRunner(config.project_dir)
         self._test_runner = TestRunner(config.project_dir)
 
         # Training
@@ -964,7 +966,25 @@ class Conductor:
                 continue
 
             # Apply the code
-            self._apply_candidate(coder_output.output)
+            applied = self._apply_candidate(coder_output.output)
+            if not applied:
+                self._layer1.add_feedback("Candidate applied no changes or used an invalid patch format")
+                if tier < 3:
+                    tier += 1
+                continue
+
+            # Run lint/static checks before tests
+            lint_result = await self._lint_runner.run(self._config.lint_command or None)
+            console.print(
+                f"    Lint: {'PASS' if lint_result.success else 'FAIL'} "
+                f"({lint_result.framework})"
+            )
+            if not lint_result.success:
+                lint_summary = lint_result.output[:200] or "Lint/static checks failed"
+                self._layer1.add_feedback(f"Lint failed: {lint_summary}")
+                if tier < 3:
+                    tier += 1
+                continue
 
             # Run tests
             test_result = await self._test_runner.run()
