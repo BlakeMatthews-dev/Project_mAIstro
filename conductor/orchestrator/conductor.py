@@ -546,7 +546,7 @@ class Conductor:
             context=context_dict,
             recipe_name="scout.analyze",
             tier=2,
-            parallel_generations=2,  # Ultra Think: 2 diverse analyses
+            # Ultra Think only for local inference — cloud calls are single-shot
             lane=Lane.BACKGROUND,
             langfuse_trace_id=langfuse_trace_id,
         )
@@ -594,7 +594,7 @@ class Conductor:
             upstream_outputs={"scout": scout_result},
             recipe_name="architect.design",
             tier=3,
-            parallel_generations=3,  # Ultra Think: 3 diverse architecture proposals
+            # Ultra Think only for local inference — cloud calls are single-shot
             lane=Lane.BACKGROUND,
             langfuse_trace_id=langfuse_trace_id,
         )
