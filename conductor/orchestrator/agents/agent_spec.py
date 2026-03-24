@@ -78,6 +78,9 @@ DEFAULT_TOOLS: dict[AgentRole, list[str]] = {
     AgentRole.CODER: ["file_ops.read", "file_ops.write", "file_ops.list", "shell.run"],
     AgentRole.REVIEWER: ["file_ops.read", "file_ops.list"],
     AgentRole.SCOUT: ["file_ops.read", "file_ops.list", "shell.run_read_only", "git.log", "git.diff"],
+    AgentRole.ARCHITECT: ["file_ops.read", "file_ops.list"],
+    AgentRole.EXTRACTOR: ["file_ops.read", "file_ops.write", "file_ops.list"],
+    AgentRole.VALIDATOR: ["file_ops.read", "file_ops.list", "shell.run_read_only"],
     AgentRole.INTENT_ROUTER: [],
     AgentRole.ARTIFACT: ["file_ops.read", "file_ops.write"],
     AgentRole.CONVERSATION: [],
@@ -150,6 +153,10 @@ class AgentSpec(BaseModel):
                 AgentRole.PLANNER: "planner.decompose",
                 AgentRole.CODER: "coder.generate",
                 AgentRole.REVIEWER: "reviewer.score",
+                AgentRole.SCOUT: "scout.analyze",
+                AgentRole.ARCHITECT: "architect.design",
+                AgentRole.EXTRACTOR: "extractor.transform",
+                AgentRole.VALIDATOR: "validator.check",
             }
             self.prompt_name = action_map.get(self.role)
         return self

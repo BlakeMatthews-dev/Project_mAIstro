@@ -1,7 +1,7 @@
 project_id: "homelab"
 project_dir: "/root/github/Project_mAIstro/conductor"
 obsidian_vault: "/root/github/Project_mAIstro/conductor/projects/homelab/vault"
-gateway_url: "http://localhost:9090"
+gateway_url: "http://localhost:8100"
 max_retries: 3
 accept_threshold: 7.0
 max_working_memory_tokens: 8000
@@ -28,6 +28,8 @@ routing_api_base: "http://localhost:8100/v1"
 routing_model: "auto"
 
 # Vault sync — local filesystem, no external services
+heartbeat_interval_minutes: 1
+
 vault_sync_mode: "local"
 
 # ── Home Assistant (Abra agent) ──────────────────────────────────

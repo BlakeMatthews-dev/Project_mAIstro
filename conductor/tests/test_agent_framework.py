@@ -379,6 +379,14 @@ class TestSchemaRegistry:
             "schemas.PlanSubtask",
             "schemas.FileChange",
             "schemas.ReviewScores",
+            "schemas.ScoutOutput",
+            "schemas.ScoutFile",
+            "schemas.ArchitectOutput",
+            "schemas.ArchitectMapping",
+            "schemas.ArchitectNewFile",
+            "schemas.ExtractorOutput",
+            "schemas.ValidatorOutput",
+            "schemas.ValidatorCheck",
         }
         assert set(SCHEMA_REGISTRY.keys()) == expected
 

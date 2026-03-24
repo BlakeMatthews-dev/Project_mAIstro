@@ -143,6 +143,16 @@ class Conductor:
             recipe_registry=self._recipe_registry,
         )
 
+        # Experimental agents — failure autopsy + model performance tracking
+        from .agents.experimental.phantom import ContextArchaeologist
+        from .agents.experimental.tournament import ModelArena
+
+        self._archaeologist = ContextArchaeologist(
+            episodic_memory=None,  # Set after episodic_memory.initialize()
+            board=None,            # Set after _board is created
+        )
+        self._arena = ModelArena()
+
         # Persistent surfaces
         memory_dir = Path(config.obsidian_vault).parent / "memory"
         self._apm = AgentPersonalityMatrix(memory_dir / "apm.yaml")
@@ -159,7 +169,7 @@ class Conductor:
             board=self._board,
             evolution=self._evolution,
             recipe_registry=self._recipe_registry,
-            interval_minutes=30,
+            interval_minutes=config.heartbeat_interval_minutes,
         )
 
         # Vault sync adapter (local, git, syncthing, or couchdb)
@@ -205,6 +215,15 @@ class Conductor:
             await self._episodic_memory.initialize()
         except Exception as exc:
             logger.warning("Episodic memory init failed (continuing without): %s", exc)
+
+        # Wire experimental agents now that persistent surfaces exist
+        self._archaeologist._memory = self._episodic_memory
+        self._archaeologist._board = self._board
+        try:
+            await self._arena.initialize()
+            logger.info("Model Arena initialized")
+        except Exception as exc:
+            logger.warning("Model Arena init failed (continuing without): %s", exc)
 
         # Start Obsidian watcher
         self._watcher.start(loop)
@@ -473,6 +492,24 @@ class Conductor:
             await self._watcher.write_failed(filename, f"Exception: {exc}")
             console.print(f"  [bold red]Error:[/] {exc}")
 
+            # Context Archaeology — forensic failure analysis
+            try:
+                autopsy = await self._archaeologist.autopsy(
+                    task_id=task_id,
+                    filename=filename,
+                    error=str(exc),
+                    intent=routing.intent.value if routing else "unknown",
+                )
+                if autopsy and self._board:
+                    self._board.observation(
+                        f"Autopsy: {task_id}",
+                        f"**Root cause:** {autopsy.get('root_cause', 'unknown')}\n"
+                        f"**Suggestion:** {autopsy.get('suggestion', 'none')}",
+                        source="context-archaeologist",
+                    )
+            except Exception as autopsy_exc:
+                logger.debug("Autopsy failed: %s", autopsy_exc)
+
     async def _handle_project_build(
         self,
         task_id: str,
@@ -509,6 +546,7 @@ class Conductor:
             context=context_dict,
             recipe_name="scout.analyze",
             tier=2,
+            parallel_generations=2,  # Ultra Think: 2 diverse analyses
             lane=Lane.BACKGROUND,
             langfuse_trace_id=langfuse_trace_id,
         )
@@ -520,6 +558,25 @@ class Conductor:
             return
 
         console.print(f"  [green]Scout complete:[/] {scout_output.output[:200] if scout_output.output else 'no output'}")
+
+        # Review scout output if Ultra Think produced multiple candidates
+        scout_result = scout_output.output or ""
+        if scout_output.output_parsed and isinstance(scout_output.output_parsed, list):
+            console.print("  [dim]Reviewing scout candidates...[/]")
+            review_spec = AgentSpec(
+                role=AgentRole.REVIEWER,
+                task_id=task_id,
+                subtask_id=f"{task_id}-scout-review",
+                description="Select the best codebase analysis from these candidates",
+                upstream_outputs={"scout_candidates": scout_result},
+                tier=2,
+                lane=Lane.BACKGROUND,
+                langfuse_trace_id=langfuse_trace_id,
+            )
+            review_out = await self._spawner.spawn(review_spec)
+            if review_out.success and review_out.output:
+                scout_result = review_out.output
+                console.print("  [green]Scout review: best candidate selected[/]")
 
         # ── Stage 2: ARCHITECT — design target structure ──────────
         await self._progress.update(
@@ -534,9 +591,10 @@ class Conductor:
             subtask_id=f"{task_id}-architect",
             description=f"Design the target repo structure for: {task_text}",
             context=context_dict,
-            upstream_outputs={"scout": scout_output.output or ""},
+            upstream_outputs={"scout": scout_result},
             recipe_name="architect.design",
             tier=3,
+            parallel_generations=3,  # Ultra Think: 3 diverse architecture proposals
             lane=Lane.BACKGROUND,
             langfuse_trace_id=langfuse_trace_id,
         )
@@ -547,14 +605,34 @@ class Conductor:
             await self._watcher.write_failed(filename, f"Architect failed: {architect_output.error}")
             return
 
-        console.print(f"  [green]Architect complete[/]")
+        console.print("  [green]Architect complete[/]")
+
+        # Review architect output if Ultra Think produced multiple candidates
+        architect_result = architect_output.output or ""
+        if architect_output.output_parsed and isinstance(architect_output.output_parsed, list):
+            console.print("  [dim]Reviewing architecture candidates...[/]")
+            review_spec = AgentSpec(
+                role=AgentRole.REVIEWER,
+                task_id=task_id,
+                subtask_id=f"{task_id}-architect-review",
+                description="Select the best repo architecture design from these candidates. Pick the one with the clearest module boundaries, most complete file mappings, and best separation of concerns.",
+                upstream_outputs={"architect_candidates": architect_result},
+                tier=2,
+                lane=Lane.BACKGROUND,
+                langfuse_trace_id=langfuse_trace_id,
+            )
+            review_out = await self._spawner.spawn(review_spec)
+            if review_out.success and review_out.output:
+                architect_result = review_out.output
+                console.print("  [green]Architect review: best design selected[/]")
 
         # Parse the architect's output for subtasks
         import json as _json
         try:
-            arch_plan = _json.loads(architect_output.output) if isinstance(architect_output.output, str) else {}
+            arch_plan = _json.loads(architect_result) if isinstance(architect_result, str) else {}
         except _json.JSONDecodeError:
-            arch_plan = {}
+            # Try to extract JSON from the reviewed output
+            arch_plan = architect_output.output_parsed if isinstance(architect_output.output_parsed, dict) else {}
 
         file_mappings = arch_plan.get("file_mappings", [])
         subtask_descriptions = arch_plan.get("subtasks", [])
@@ -602,7 +680,7 @@ class Conductor:
                 console.print(f"    [red]Failed:[/] {ext_output.error}")
                 extract_failures.append(f"{target}: {ext_output.error}")
             else:
-                console.print(f"    [green]OK[/]")
+                console.print("    [green]OK[/]")
 
         # ── Stage 4: VALIDATOR — check everything builds ──────────
         await self._progress.update(
@@ -626,7 +704,7 @@ class Conductor:
         val_output = await self._spawner.spawn(validator_spec)
 
         # ── Finalize ──────────────────────────────────────────────
-        result_parts = [f"## Project Build Result\n"]
+        result_parts = ["## Project Build Result\n"]
         result_parts.append(f"**Files mapped:** {len(file_mappings)}")
         result_parts.append(f"**Extract failures:** {len(extract_failures)}")
         if extract_failures:
@@ -849,6 +927,21 @@ class Conductor:
                             tags=[],
                         )
                     )
+
+                # Record model performance in Arena
+                try:
+                    if self._arena._pool:
+                        await self._arena.record(
+                            model=getattr(coder_output, "model", "unknown") or "unknown",
+                            task_type=self._classify_task(description),
+                            score=selected_score,
+                            provider=getattr(coder_output, "provider", "") or "",
+                            tokens_used=getattr(coder_output, "tokens_used", 0) or 0,
+                            latency_ms=getattr(coder_output, "duration_ms", 0) or 0,
+                            task_id=task_id,
+                        )
+                except Exception as arena_exc:
+                    logger.debug("Arena record failed: %s", arena_exc)
 
                 self._layer1.complete_subtask(subtask_id, coder_output.output[:100])
                 return True

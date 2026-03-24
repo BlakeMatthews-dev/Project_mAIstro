@@ -36,6 +36,9 @@ class OrchestratorConfig(BaseModel):
     routing_api_base: str = ""
     routing_model: str = ""
 
+    # Heartbeat interval in minutes (how often the autonomous loop runs)
+    heartbeat_interval_minutes: int = 1
+
     # Vault sync: "local" (default), "git", "syncthing", or "couchdb"
     vault_sync_mode: str = "local"
     # Git sync options

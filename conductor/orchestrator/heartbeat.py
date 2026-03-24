@@ -75,6 +75,9 @@ class Heartbeat:
         from .agents.experimental.dream_loop import DreamLoop
         from .agents.experimental.red_team import RedTeamExercise
         from .agents.experimental.temporal import MoodRing, PatternRecognizer, TimeCapsule
+        from .agents.experimental.skill_forge import SkillForge
+        from .agents.experimental.stress_rehearsal import StressRehearsal
+        from .agents.experimental.tournament import ModelArena
 
         self._mood = MoodRing()
         self._dream = DreamLoop(
@@ -93,6 +96,20 @@ class Heartbeat:
             board=board,
             evolution=evolution,
         )
+        self._skill_forge = SkillForge(
+            skills_dir=Path(apm._path).parent.parent / "skills" if apm else Path("./skills"),
+            scanner=scanner,
+            episodic_memory=episodic_memory,
+            board=board,
+            evolution=evolution,
+        )
+        self._stress = StressRehearsal(
+            episodic_memory=episodic_memory,
+            board=board,
+            evolution=evolution,
+        )
+        self._arena = ModelArena()
+        self._arena_initialized = False
 
     async def start(self) -> None:
         """Start the heartbeat loop. Runs until stop() is called."""
@@ -250,6 +267,47 @@ class Heartbeat:
                 logger.info("Red team: %s", red_result)
             except Exception as exc:
                 logger.debug("Red team failed: %s", exc)
+
+        # 9. Skill forge — suggest new skills from observed patterns (~daily)
+        if self._cycle_count % 48 == 0 and self._cycle_count > 0:
+            try:
+                # Gather recent failures from the vault's failed/ directory
+                recent_failures = []
+                failed_dir = self._skill_forge._dir.parent / "vault" / "conductor" / "failed"
+                if failed_dir.exists():
+                    for f in sorted(failed_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]:
+                        recent_failures.append({"filename": f.name, "content": f.read_text(encoding="utf-8")[:500]})
+                suggestions = await self._skill_forge.suggest_skills(recent_failures)
+                if suggestions and self._board:
+                    self._board.suggestion(
+                        f"Skill Forge: {len(suggestions)} skill suggestion(s)",
+                        "\n".join(f"- {s}" for s in suggestions[:5]),
+                        source="heartbeat/skill-forge",
+                    )
+                actions_taken += 1
+                logger.info("Skill forge: %d suggestions", len(suggestions) if suggestions else 0)
+            except Exception as exc:
+                logger.debug("Skill forge failed: %s", exc)
+
+        # 10. Stress rehearsal (~biweekly, requires ADVENTUROUS mood)
+        if (self._mood.should_run_stress_rehearsal()
+                and self._cycle_count % 672 == 1  # ~biweekly at 30min intervals
+                and self._cycle_count > 1):
+            try:
+                stress_result = await self._stress.run_rehearsal()
+                actions_taken += 1
+                logger.info("Stress rehearsal: %s", stress_result)
+            except Exception as exc:
+                logger.debug("Stress rehearsal failed: %s", exc)
+
+        # 11. Model Arena — initialize if needed (lazy, once)
+        if not self._arena_initialized and self._memory:
+            try:
+                await self._arena.initialize()
+                self._arena_initialized = True
+                logger.info("Model Arena initialized")
+            except Exception as exc:
+                logger.debug("Model Arena init failed (will retry): %s", exc)
 
         # Commit evolution history
         if self._evolution:
@@ -532,9 +590,47 @@ class Heartbeat:
             return {"executed": False, "reason": str(exc)}
 
     async def _run_skill_scan(self) -> dict:
-        """Re-scan loaded skills for new vulnerabilities."""
-        # Placeholder — will wire when SkillLoader is integrated into conductor
-        return {"executed": True, "should_escalate": False}
+        """Re-scan loaded skills for new vulnerabilities via PhantomExecutor."""
+        from .agents.experimental.phantom import PhantomExecutor
+
+        phantom = PhantomExecutor()
+        violations_found = []
+
+        # Scan all skill .md files in the forge directory
+        skills_dir = self._skill_forge._dir if self._skill_forge else None
+        if not skills_dir or not skills_dir.exists():
+            return {"executed": True, "should_escalate": False, "reason": "no skills dir"}
+
+        for skill_file in skills_dir.glob("*.md"):
+            try:
+                content = skill_file.read_text(encoding="utf-8")
+                result = phantom.analyze_skill_instructions(
+                    skill_name=skill_file.stem,
+                    instructions=content,
+                    declared_env=[],
+                    declared_bins=[],
+                )
+                if not result.safe:
+                    violations_found.append(
+                        f"{skill_file.stem}: {', '.join(result.violations)}"
+                    )
+            except Exception as exc:
+                logger.debug("Skill scan failed for %s: %s", skill_file.stem, exc)
+
+        if violations_found and self._board:
+            self._board.alert(
+                f"Skill scan: {len(violations_found)} violation(s) found",
+                "\n".join(f"- {v}" for v in violations_found),
+                source="heartbeat/skill-scan",
+            )
+
+        return {
+            "executed": True,
+            "skills_scanned": len(list(skills_dir.glob("*.md"))),
+            "violations": len(violations_found),
+            "should_escalate": len(violations_found) > 0,
+            "escalation_reason": f"{len(violations_found)} skill violations found",
+        }
 
     async def _check_quota_pressure(self) -> dict:
         """Check provider quota usage and project burn rate."""
