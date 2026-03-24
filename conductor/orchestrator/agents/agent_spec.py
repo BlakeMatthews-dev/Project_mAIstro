@@ -35,9 +35,12 @@ class AgentRole(StrEnum):
     PLANNER = "planner"
     CODER = "coder"
     REVIEWER = "reviewer"
-    SCOUT = "scout"           # Future: codebase exploration / research
+    SCOUT = "scout"           # Codebase exploration, file inventory, dependency mapping
+    ARCHITECT = "architect"   # Designs module boundaries, repo structure, import graphs
+    EXTRACTOR = "extractor"   # Copy + rename + sanitize + split files between locations
+    VALIDATOR = "validator"   # Run the result (docker build, import check, pytest)
     INTENT_ROUTER = "intent_router"
-    ARTIFACT = "artifact"     # Future: document / diagram generation
+    ARTIFACT = "artifact"     # Document / diagram generation
     CONVERSATION = "conversation"
 
 

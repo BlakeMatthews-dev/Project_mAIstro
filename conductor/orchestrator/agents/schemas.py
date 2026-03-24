@@ -111,6 +111,120 @@ class ReviewScores(BaseModel):
 ReviewOutput.model_rebuild()
 
 
+# ── Scout: codebase analysis ──────────────────────────────────────
+
+class ScoutFile(BaseModel):
+    """A single file in a scout inventory."""
+    path: str = Field(description="File path relative to scan root")
+    lines: int = Field(description="Line count")
+    imports: list[str] = Field(default_factory=list, description="Top-level imports")
+    exports: list[str] = Field(default_factory=list, description="Classes/functions defined")
+    category: str = Field(default="", description="Functional category (e.g. 'security', 'memory', 'routing')")
+
+
+class ScoutOutput(BaseModel):
+    """Structured output from the scout agent."""
+    files: list[ScoutFile] = Field(description="File inventory")
+    total_lines: int = Field(default=0, description="Total LOC across all files")
+    dependency_graph: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="File → list of files it imports from (internal deps only)",
+    )
+    god_files: list[str] = Field(
+        default_factory=list,
+        description="Files >500 LOC that should be split",
+    )
+    summary: str = Field(default="", description="Brief structural analysis")
+
+
+ScoutOutput.model_rebuild()
+
+
+# ── Architect: structure design ───────────────────────────────────
+
+class ArchitectMapping(BaseModel):
+    """A single file mapping from source to target."""
+    source: str = Field(description="Source file path")
+    target: str = Field(description="Target file path in new structure")
+    transforms: list[str] = Field(
+        default_factory=list,
+        description="Transforms to apply: 'rename:old→new', 'sanitize:pattern', 'split:function_name→new_file'",
+    )
+    priority: int = Field(default=5, description="Execution order (1=first)")
+
+
+class ArchitectOutput(BaseModel):
+    """Structured output from the architect agent."""
+    directory_structure: list[str] = Field(
+        description="Target directory tree (list of paths to create)",
+    )
+    file_mappings: list[ArchitectMapping] = Field(
+        description="Ordered list of source→target file mappings with transforms",
+    )
+    new_files: list[ArchitectNewFile] = Field(
+        default_factory=list,
+        description="Files to create from scratch (READMEs, __init__.py, etc.)",
+    )
+    subtasks: list[str] = Field(
+        default_factory=list,
+        description="Ordered human-readable subtask descriptions for the extractor",
+    )
+    reasoning: str = Field(default="", description="Architecture decisions and rationale")
+
+
+class ArchitectNewFile(BaseModel):
+    """A file to be created from scratch."""
+    path: str = Field(description="Target path")
+    description: str = Field(description="What this file should contain")
+    template: str = Field(default="", description="Rough content template or instructions")
+
+
+ArchitectOutput.model_rebuild()
+
+
+# ── Extractor: file transformation ────────────────────────────────
+
+class ExtractorOutput(BaseModel):
+    """Structured output from the extractor agent."""
+    files_written: list[FileChange] = Field(
+        default_factory=list,
+        description="Files written to target location",
+    )
+    renames_applied: list[str] = Field(
+        default_factory=list,
+        description="Rename operations performed (e.g. 'conductor→sovereign')",
+    )
+    sanitizations: list[str] = Field(
+        default_factory=list,
+        description="Credential/IP sanitizations performed",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Issues encountered that need human review",
+    )
+    summary: str = Field(default="", description="What was done")
+
+
+# ── Validator: build/test verification ────────────────────────────
+
+class ValidatorCheck(BaseModel):
+    """A single validation check result."""
+    name: str = Field(description="Check name (e.g. 'import_check', 'docker_build')")
+    passed: bool = Field(description="Whether the check passed")
+    output: str = Field(default="", description="Command output or error message")
+
+
+class ValidatorOutput(BaseModel):
+    """Structured output from the validator agent."""
+    checks: list[ValidatorCheck] = Field(description="Results of each validation check")
+    all_passed: bool = Field(description="Whether all checks passed")
+    blocking_issues: list[str] = Field(
+        default_factory=list,
+        description="Issues that must be fixed before proceeding",
+    )
+    summary: str = Field(default="", description="Validation summary")
+
+
 # Registry: maps dotted path strings to classes for runtime resolution
 SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "schemas.PlanOutput": PlanOutput,
@@ -119,6 +233,14 @@ SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "schemas.PlanSubtask": PlanSubtask,
     "schemas.FileChange": FileChange,
     "schemas.ReviewScores": ReviewScores,
+    "schemas.ScoutOutput": ScoutOutput,
+    "schemas.ScoutFile": ScoutFile,
+    "schemas.ArchitectOutput": ArchitectOutput,
+    "schemas.ArchitectMapping": ArchitectMapping,
+    "schemas.ArchitectNewFile": ArchitectNewFile,
+    "schemas.ExtractorOutput": ExtractorOutput,
+    "schemas.ValidatorOutput": ValidatorOutput,
+    "schemas.ValidatorCheck": ValidatorCheck,
 }
 
 

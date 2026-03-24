@@ -403,6 +403,11 @@ class Conductor:
                     await self._watcher.write_failed(filename, f"Conversation failed: {exc}")
                 return
 
+            if routing.intent == Intent.PROJECT_BUILD:
+                console.print("  [bold magenta]Project build → Scout → Architect → Extractor → Validator[/]")
+                await self._handle_project_build(task_id, filename, routing, langfuse_trace_id)
+                return
+
             # CODE or ANALYSIS → existing pipeline
             console.print(f"  [dim]Intent: {routing.intent.value} → {routing.agent_name} (confidence: {routing.confidence:.0%})[/]")
             effective_task = routing.rewritten_task or task_text
@@ -467,6 +472,182 @@ class Conductor:
             await self._progress.update(task_id, "failed", filename=filename, error=str(exc))
             await self._watcher.write_failed(filename, f"Exception: {exc}")
             console.print(f"  [bold red]Error:[/] {exc}")
+
+    async def _handle_project_build(
+        self,
+        task_id: str,
+        filename: str,
+        routing,
+        langfuse_trace_id: str | None = None,
+    ) -> None:
+        """Multi-agent pipeline for project extraction and restructuring.
+
+        Pipeline: SCOUT → ARCHITECT → EXTRACTOR (per file) → VALIDATOR
+
+        Each stage uses Ultra Think for parallel candidate generation and
+        the Reviewer for selection. The architect's output becomes the
+        execution plan for the extractors.
+        """
+        task_text = routing.rewritten_task or routing.raw_input
+        context_dict = {
+            "layer0": self._layer0.build_prompt_section(),
+            "layer1": self._layer1.build_prompt_section(),
+        }
+
+        # ── Stage 1: SCOUT — analyze source codebase ─────────────
+        await self._progress.update(
+            task_id, "scouting", filename=filename,
+            current_step="Scout: analyzing source codebase",
+        )
+        console.print("  [dim]Stage 1: Scout analyzing source...[/]")
+
+        scout_spec = AgentSpec(
+            role=AgentRole.SCOUT,
+            task_id=task_id,
+            subtask_id=f"{task_id}-scout",
+            description=f"Analyze the source codebase for: {task_text}",
+            context=context_dict,
+            recipe_name="scout.analyze",
+            tier=2,
+            lane=Lane.BACKGROUND,
+            langfuse_trace_id=langfuse_trace_id,
+        )
+        scout_output = await self._spawner.spawn(scout_spec)
+
+        if not scout_output.success:
+            console.print(f"  [red]Scout failed:[/] {scout_output.error}")
+            await self._watcher.write_failed(filename, f"Scout failed: {scout_output.error}")
+            return
+
+        console.print(f"  [green]Scout complete:[/] {scout_output.output[:200] if scout_output.output else 'no output'}")
+
+        # ── Stage 2: ARCHITECT — design target structure ──────────
+        await self._progress.update(
+            task_id, "architecting", filename=filename,
+            current_step="Architect: designing target structure",
+        )
+        console.print("  [dim]Stage 2: Architect designing structure...[/]")
+
+        architect_spec = AgentSpec(
+            role=AgentRole.ARCHITECT,
+            task_id=task_id,
+            subtask_id=f"{task_id}-architect",
+            description=f"Design the target repo structure for: {task_text}",
+            context=context_dict,
+            upstream_outputs={"scout": scout_output.output or ""},
+            recipe_name="architect.design",
+            tier=3,
+            lane=Lane.BACKGROUND,
+            langfuse_trace_id=langfuse_trace_id,
+        )
+        architect_output = await self._spawner.spawn(architect_spec)
+
+        if not architect_output.success:
+            console.print(f"  [red]Architect failed:[/] {architect_output.error}")
+            await self._watcher.write_failed(filename, f"Architect failed: {architect_output.error}")
+            return
+
+        console.print(f"  [green]Architect complete[/]")
+
+        # Parse the architect's output for subtasks
+        import json as _json
+        try:
+            arch_plan = _json.loads(architect_output.output) if isinstance(architect_output.output, str) else {}
+        except _json.JSONDecodeError:
+            arch_plan = {}
+
+        file_mappings = arch_plan.get("file_mappings", [])
+        subtask_descriptions = arch_plan.get("subtasks", [])
+
+        console.print(f"  Plan: {len(file_mappings)} file mappings, {len(subtask_descriptions)} subtasks")
+
+        # ── Stage 3: EXTRACTOR — transform each file ─────────────
+        await self._progress.update(
+            task_id, "extracting", filename=filename,
+            current_step=f"Extracting {len(file_mappings)} files",
+            steps_total=len(file_mappings),
+        )
+
+        extract_failures = []
+        for i, mapping in enumerate(file_mappings):
+            source = mapping.get("source", "")
+            target = mapping.get("target", "")
+            transforms = mapping.get("transforms", [])
+
+            console.print(f"  [dim]Extracting [{i+1}/{len(file_mappings)}]: {source} → {target}[/]")
+            await self._progress.update(
+                task_id, "extracting", filename=filename,
+                current_step=f"Extracting {i+1}/{len(file_mappings)}: {target}",
+                steps_total=len(file_mappings), steps_completed=i,
+            )
+
+            extractor_spec = AgentSpec(
+                role=AgentRole.EXTRACTOR,
+                task_id=task_id,
+                subtask_id=f"{task_id}-extract-{i}",
+                description=f"Extract {source} → {target} with transforms: {transforms}",
+                context=context_dict,
+                upstream_outputs={
+                    "architect": architect_output.output or "",
+                    "mapping": _json.dumps(mapping),
+                },
+                recipe_name="extractor.transform",
+                tier=2,
+                lane=Lane.BACKGROUND,
+                langfuse_trace_id=langfuse_trace_id,
+            )
+            ext_output = await self._spawner.spawn(extractor_spec)
+
+            if not ext_output.success:
+                console.print(f"    [red]Failed:[/] {ext_output.error}")
+                extract_failures.append(f"{target}: {ext_output.error}")
+            else:
+                console.print(f"    [green]OK[/]")
+
+        # ── Stage 4: VALIDATOR — check everything builds ──────────
+        await self._progress.update(
+            task_id, "validating", filename=filename,
+            current_step="Validator: checking build integrity",
+        )
+        console.print("  [dim]Stage 4: Validator checking build...[/]")
+
+        validator_spec = AgentSpec(
+            role=AgentRole.VALIDATOR,
+            task_id=task_id,
+            subtask_id=f"{task_id}-validate",
+            description="Validate the extracted Stronghold repo builds and imports correctly",
+            context=context_dict,
+            upstream_outputs={"architect": architect_output.output or ""},
+            recipe_name="validator.check",
+            tier=2,
+            lane=Lane.BACKGROUND,
+            langfuse_trace_id=langfuse_trace_id,
+        )
+        val_output = await self._spawner.spawn(validator_spec)
+
+        # ── Finalize ──────────────────────────────────────────────
+        result_parts = [f"## Project Build Result\n"]
+        result_parts.append(f"**Files mapped:** {len(file_mappings)}")
+        result_parts.append(f"**Extract failures:** {len(extract_failures)}")
+        if extract_failures:
+            result_parts.append("\n### Failures:")
+            for f in extract_failures:
+                result_parts.append(f"- {f}")
+        if val_output.success:
+            result_parts.append(f"\n### Validation:\n{val_output.output[:500] if val_output.output else 'OK'}")
+        else:
+            result_parts.append(f"\n### Validation FAILED:\n{val_output.error}")
+
+        result_text = "\n".join(result_parts)
+
+        if not extract_failures and val_output.success:
+            await self._progress.update(task_id, "completed", filename=filename, current_step="Build complete")
+            await self._watcher.write_completed(filename, result_text)
+            console.print("  [bold green]Project build complete![/]")
+        else:
+            await self._progress.update(task_id, "failed", filename=filename, error=f"{len(extract_failures)} failures")
+            await self._watcher.write_failed(filename, result_text)
+            console.print(f"  [bold red]Project build finished with {len(extract_failures)} failures[/]")
 
     async def _handle_home_automation(self, filename: str, routing) -> None:
         """Route a home automation intent through Abra.

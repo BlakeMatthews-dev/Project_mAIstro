@@ -1,0 +1,18 @@
+name: extractor.transform
+role: extractor
+description: "Copy a file from source to target with renames, sanitization, and structural transforms"
+prompt_name: extractor.transform
+prompt_variants:
+  - production
+result_schema: schemas.ExtractorOutput
+tools:
+  - file_ops.read
+  - file_ops.write
+  - file_ops.list
+  - shell.run
+min_tier: 2
+max_tier: 3
+temperature: 0.1
+max_tokens: 8192
+min_samples_before_selection: 10
+exploration_rate: 0.05

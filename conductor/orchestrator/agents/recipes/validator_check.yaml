@@ -1,0 +1,17 @@
+name: validator.check
+role: validator
+description: "Validate extracted code — import checks, docker build, pytest, startup verification"
+prompt_name: validator.check
+prompt_variants:
+  - production
+result_schema: schemas.ValidatorOutput
+tools:
+  - shell.run
+  - file_ops.read
+  - file_ops.list
+min_tier: 1
+max_tier: 2
+temperature: 0.1
+max_tokens: 2048
+min_samples_before_selection: 10
+exploration_rate: 0.1

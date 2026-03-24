@@ -48,6 +48,7 @@ class Intent(str, Enum):
     HOME_AUTOMATION = "home_automation"
     ARTIFACT = "artifact"
     ANALYSIS = "analysis"
+    PROJECT_BUILD = "project_build"  # Multi-file extraction, repo scaffolding, transforms
     CONVERSATION = "conversation"
     DENIED = "denied"
     UNCLEAR = "unclear"
@@ -96,6 +97,12 @@ _TRIGGER_PATTERNS: list[tuple[re.Pattern, Intent, str]] = [
     # Artifacts
     (re.compile(r"\b(create|make|generate|write)\s+(a\s+)?(document|doc|presentation|report|readme|proposal)\b", re.IGNORECASE), Intent.ARTIFACT, "artifact"),
     (re.compile(r"\bdraft\s+(a\s+)?(email|memo|spec|rfc|design\s+doc)\b", re.IGNORECASE), Intent.ARTIFACT, "artifact"),
+
+    # Project build (multi-file extraction, repo scaffolding)
+    (re.compile(r"\b(build|create|extract|scaffold)\s+(the\s+)?(stronghold|repo|project|clean\s+repo)\b", re.IGNORECASE), Intent.PROJECT_BUILD, "architect"),
+    (re.compile(r"\b(split|decompose|restructure|modularize)\s+(the\s+)?(codebase|monolith|god\s+file)\b", re.IGNORECASE), Intent.PROJECT_BUILD, "architect"),
+    (re.compile(r"\bextract\s+.*\s+into\s+(a\s+)?(new|clean|separate)\b", re.IGNORECASE), Intent.PROJECT_BUILD, "architect"),
+    (re.compile(r"\b(migrate|port|move)\s+.*\s+(to|into)\s+(a\s+)?(new|different)\s+(repo|structure|layout)\b", re.IGNORECASE), Intent.PROJECT_BUILD, "architect"),
 ]
 
 # Safety patterns — always checked first

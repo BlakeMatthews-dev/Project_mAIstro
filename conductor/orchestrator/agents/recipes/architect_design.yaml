@@ -1,0 +1,16 @@
+name: architect.design
+role: architect
+description: "Design repo structure, module boundaries, import graphs, and transformation plans from a spec + scout analysis"
+prompt_name: architect.design
+prompt_variants:
+  - production
+result_schema: schemas.ArchitectOutput
+tools:
+  - file_ops.read
+  - file_ops.list
+min_tier: 2
+max_tier: 3
+temperature: 0.3
+max_tokens: 4096
+min_samples_before_selection: 10
+exploration_rate: 0.1
