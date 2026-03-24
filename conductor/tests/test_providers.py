@@ -138,7 +138,7 @@ class TestLocalProvider:
                 "usage": {"prompt_tokens": 20, "completion_tokens": 5},
             })
 
-        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider._client = httpx.AsyncClient(base_url="http://fake:8080", transport=httpx.MockTransport(handler))
 
         result = await provider.chat_completion(
             messages=[{"role": "user", "content": "hi"}],
@@ -160,7 +160,7 @@ class TestLocalProvider:
                 "usage": {},
             })
 
-        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider._client = httpx.AsyncClient(base_url="http://fake:8080", transport=httpx.MockTransport(handler))
 
         await provider.chat_completion(
             messages=[{"role": "user", "content": "test"}],
@@ -174,6 +174,7 @@ class TestLocalProvider:
     async def test_health_check_ok(self, config):
         provider = LocalProvider(config)
         provider._client = httpx.AsyncClient(
+            base_url="http://fake:8080",
             transport=httpx.MockTransport(
                 lambda _: httpx.Response(200, json={"status": "ok"})
             )
@@ -184,6 +185,7 @@ class TestLocalProvider:
     async def test_health_check_fail(self, config):
         provider = LocalProvider(config)
         provider._client = httpx.AsyncClient(
+            base_url="http://fake:8080",
             transport=httpx.MockTransport(
                 lambda _: httpx.Response(503, json={"status": "loading"})
             )
@@ -235,7 +237,11 @@ class TestAnthropicProvider:
                 "usage": {"input_tokens": 20, "output_tokens": 5},
             })
 
-        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider._client = httpx.AsyncClient(
+            base_url="https://api.anthropic.com",
+            transport=httpx.MockTransport(handler),
+            headers={"x-api-key": "sk-ant-test-key", "anthropic-version": "2023-06-01"},
+        )
 
         result = await provider.chat_completion(
             messages=[
@@ -261,7 +267,7 @@ class TestAnthropicProvider:
                 "usage": {"input_tokens": 10, "output_tokens": 2},
             })
 
-        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider._client = httpx.AsyncClient(base_url="http://fake:8080", transport=httpx.MockTransport(handler))
 
         await provider.chat_completion(
             messages=[{"role": "user", "content": "test"}],
@@ -328,7 +334,11 @@ class TestOpenAICompatProvider:
                 "usage": {"prompt_tokens": 15, "completion_tokens": 4},
             })
 
-        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider._client = httpx.AsyncClient(
+            base_url="https://api.openai.com/v1",
+            transport=httpx.MockTransport(handler),
+            headers={"authorization": "Bearer sk-test-key"},
+        )
 
         result = await provider.chat_completion(
             messages=[{"role": "user", "content": "Hi"}],
@@ -349,7 +359,7 @@ class TestOpenAICompatProvider:
                 "usage": {},
             })
 
-        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider._client = httpx.AsyncClient(base_url="http://fake:8080", transport=httpx.MockTransport(handler))
 
         # Even if extra is passed, provider should not forward it
         await provider.chat_completion(
@@ -371,7 +381,7 @@ class TestOpenAICompatProvider:
                 "usage": {},
             })
 
-        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider._client = httpx.AsyncClient(base_url="http://fake:8080", transport=httpx.MockTransport(handler))
 
         await provider.chat_completion(
             messages=[{"role": "user", "content": "test"}],

@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -103,7 +103,7 @@ class DataCollector:
         avg_candidates = (
             sum(len(r.get("candidates", [])) for r in rows) / total
         )
-        tier_dist = {}
+        tier_dist: dict[int, int] = {}
         for r in rows:
             t = r.get("tier", 0)
             tier_dist[t] = tier_dist.get(t, 0) + 1

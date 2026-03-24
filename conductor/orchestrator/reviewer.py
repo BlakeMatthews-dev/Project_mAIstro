@@ -17,7 +17,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-import httpx
+from . import _gateway_auth
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +75,6 @@ class Reviewer:
     def __init__(self, gateway_url: str, accept_threshold: float = 7.0) -> None:
         self._gateway_url = gateway_url
         self._accept_threshold = accept_threshold
-        self._client = httpx.AsyncClient(
-            base_url=gateway_url,
-            timeout=120,
-        )
 
     async def review(
         self,
@@ -101,7 +97,8 @@ class Reviewer:
         messages.append({"role": "system", "content": REVIEWER_SYSTEM_PROMPT})
         messages.append({"role": "user", "content": prompt})
 
-        resp = await self._client.post(
+        client = await _gateway_auth.gateway_client()
+        resp = await client.post(
             "/v1/chat/completions",
             json={
                 "model": "conductor",
@@ -131,7 +128,7 @@ class Reviewer:
         except (json.JSONDecodeError, IndexError):
             logger.warning("Failed to parse reviewer output, using default scores")
             # Fallback: give all candidates a middling score, pick first
-            scores = [
+            scores = [  # type: ignore[assignment]
                 ReviewScore(
                     candidate_idx=i,
                     correctness=5.0,
@@ -145,15 +142,15 @@ class Reviewer:
             ]
             return ReviewResult(
                 subtask_id=subtask_id,
-                scores=scores,
+                scores=scores,  # type: ignore[arg-type]
                 selected_idx=0,
                 selected_score=5.0,
                 feedback_summary="Review parse failed — defaulting to candidate 0",
             )
 
-        scores: list[ReviewScore] = []
+        scores: list[ReviewScore] = []  # type: ignore[no-redef]
         for s in parsed.get("scores", []):
-            scores.append(
+            scores.append(  # type: ignore[attr-defined]
                 ReviewScore(
                     candidate_idx=s.get("candidate_idx", 0),
                     correctness=s.get("correctness", 5.0),
@@ -172,7 +169,7 @@ class Reviewer:
 
         return ReviewResult(
             subtask_id=subtask_id,
-            scores=scores,
+            scores=scores,  # type: ignore[arg-type]
             selected_idx=selected_idx,
             selected_score=selected_score,
             feedback_summary=parsed.get("feedback_summary", ""),
@@ -183,4 +180,4 @@ class Reviewer:
         return self._accept_threshold
 
     async def close(self) -> None:
-        await self._client.aclose()
+        pass  # Shared client closed by conductor

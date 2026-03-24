@@ -28,6 +28,14 @@ class OrchestratorConfig(BaseModel):
     inference_model: str = ""
     inference_max_tokens: int = 4096
 
+    # Routing: separate provider/model for intent classification.
+    # Use a smarter cloud model for routing while keeping local for generation.
+    # If routing_provider is empty, classification goes through the gateway.
+    routing_provider: str = ""       # "anthropic", "openai", "openrouter", or "" (use gateway)
+    routing_api_key: str = ""
+    routing_api_base: str = ""
+    routing_model: str = ""
+
     # Vault sync: "local" (default), "git", "syncthing", or "couchdb"
     vault_sync_mode: str = "local"
     # Git sync options
@@ -54,6 +62,24 @@ class OrchestratorConfig(BaseModel):
 
     @classmethod
     def from_yaml(cls, path: str) -> OrchestratorConfig:
-        """Load config from a YAML file."""
+        """Load config from a YAML file, with env var fallback for secrets.
+
+        Any config field can be overridden by an env var with the same name
+        (uppercase). Secrets should come from env vars (loaded by systemd
+        EnvironmentFile), not from the YAML file.
+        """
+        import os
+
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+
+        # Env var fallback for secrets — these should NOT be in YAML
+        secret_fields = [
+            "ha_token", "inference_api_key", "routing_api_key",
+        ]
+        for field_name in secret_fields:
+            env_name = field_name.upper()
+            env_val = os.environ.get(env_name, "")
+            if env_val and not data.get(field_name):
+                data[field_name] = env_val
+
         return cls(**data)

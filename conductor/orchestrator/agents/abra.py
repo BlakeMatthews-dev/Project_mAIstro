@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 import httpx
 
@@ -282,7 +281,7 @@ class DeviceRegistry:
             room_devices: dict[str, list[HADevice]] = {}
 
             for entity in entities:
-                eid: str = entity.get("entity_id", "")
+                eid = entity.get("entity_id", "")  # type: ignore[no-redef]
                 parts = eid.split(".", 1)
                 if len(parts) != 2:
                     continue
@@ -295,7 +294,7 @@ class DeviceRegistry:
                 friendly = attrs.get("friendly_name", entity_name)
 
                 # Determine area — prefer explicit mapping, fall back to parsing
-                area = entity_areas.get(eid)
+                area = entity_areas.get(eid)  # type: ignore[assignment]
                 if not area:
                     # Parse from entity_id: fan.living_room → living_room
                     # Strip trailing numbers: fan.living_room_2 → living_room
@@ -519,7 +518,7 @@ class ComfortIntent(str, Enum):
 
 # Pattern → comfort intent mapping
 # Order matters: more specific patterns first (e.g. "warm it up" before bare "warm")
-_COMFORT_PATTERNS: list[tuple[str, ComfortIntent]] = [
+_COMFORT_PATTERNS: list[tuple[str, ComfortIntent | None]] = [
     # Warm up (check BEFORE cool_down since "warm" is ambiguous)
     (r"\bwarm\s*(it|the|this)\s*(up)\b", ComfortIntent.WARM_UP),
     (r"\bwarm\s+up\b", ComfortIntent.WARM_UP),
@@ -530,7 +529,7 @@ _COMFORT_PATTERNS: list[tuple[str, ComfortIntent]] = [
     (r"\bcool\s*(it|the|this)?\s*(down|off)\b", ComfortIntent.COOL_DOWN),
     (r"\bturn\s+(on\s+)?(the\s+)?(ac|air\s+condition)", ComfortIntent.COOL_DOWN),
     # Fan
-    (r"\bfan\s+(on|off)\b", None),  # handled by on/off split below
+    (r"\bfan\s+(on|off)\b", None),  # handled by on/off split below  # type: ignore[list-item]
     (r"\bturn\s+(on\s+)?(the\s+)?fan\b", ComfortIntent.FAN_ON),
     (r"\bturn\s+off\s+(the\s+)?fan\b", ComfortIntent.FAN_OFF),
     # Lights
@@ -550,7 +549,7 @@ _COMFORT_PATTERNS: list[tuple[str, ComfortIntent]] = [
 ]
 
 
-import re
+import re  # noqa: E402
 
 
 def _infer_services(domain: str, supported_features: int) -> list[str]:

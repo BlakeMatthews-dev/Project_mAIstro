@@ -1,0 +1,38 @@
+project_id: "homelab"
+project_dir: "/root/github/Project_mAIstro/conductor"
+obsidian_vault: "/root/github/Project_mAIstro/conductor/projects/homelab/vault"
+gateway_url: "http://localhost:9090"
+max_retries: 3
+accept_threshold: 7.0
+max_working_memory_tokens: 8000
+layer0_path: "./constraints.md"
+training_data_dir: "./data/training"
+exemplar_library_dir: "./data/exemplars"
+
+# ── Inference via Conductor Router (cloud APIs with free tokens) ──
+# Router auto-selects best model from 85 models across 11 providers
+# Falls back to Ollama when GPU is available (backlog item #10)
+inference_provider: "openai"
+# inference_api_key loaded from /root/.conductor-secrets/conductor.env via systemd EnvironmentFile
+inference_api_base: "http://localhost:8100/v1"
+inference_model: "auto"
+inference_max_tokens: 4096
+
+# ── Routing — uses conductor-router (port 8100) for classification ─
+# The conductor-router has 70+ models across 7 free-tier providers
+# with quota-aware selection. No need to duplicate that here.
+# It routes through LiteLLM which picks the best available model.
+routing_provider: "openai"
+# routing_api_key loaded from env
+routing_api_base: "http://localhost:8100/v1"
+routing_model: "auto"
+
+# Vault sync — local filesystem, no external services
+vault_sync_mode: "local"
+
+# ── Home Assistant (Abra agent) ──────────────────────────────────
+# HA on IoT VLAN (10.10.42.174) — separate physical device
+# Generate a long-lived access token: Profile → Long-Lived Access Tokens
+ha_url: "http://10.10.42.174:8123"
+# ha_token loaded from /root/.conductor-secrets/conductor.env via systemd EnvironmentFile
+ha_sync_entities: true

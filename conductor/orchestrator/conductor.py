@@ -23,33 +23,43 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import sys
 import uuid
 from pathlib import Path
 
-import httpx
 from rich.console import Console
 from rich.logging import RichHandler
 
-from .config import OrchestratorConfig
-from .planner import Planner
+from . import _gateway_auth
+from .agents.abra import Abra, DeviceRegistry
+from .agents.agent_spec import RECOVERABLE_ERRORS, AgentRole, AgentSpec, Lane
+from .agents.bouncer import Bouncer, Verdict
+from .agents.intent_router import Intent, IntentRouter
+from .agents.recipe import RecipeRegistry
+from .agents.spawner import Spawner
+from .agents.variant_selector import VariantSelector
 from .coder import Coder
-from .reviewer import Reviewer
+from .config import OrchestratorConfig
+from .heartbeat import Heartbeat
+from .interfaces.obsidian_watcher import ObsidianWatcher
+from .interfaces.vault_sync import create_sync_adapter
+from .memory.apm import AgentPersonalityMatrix
+from .memory.board import MessageBoard
+from .memory.changelog import Changelog, ChangelogEntry
+from .memory.episodic import EpisodicMemory
+from .memory.evolution import EvolutionHistory
+from .memory.knowledge_graph import KnowledgeGraph
 from .memory.layer0 import Layer0
 from .memory.layer1 import Layer1
 from .memory.layer2 import Layer2
-from .memory.changelog import Changelog, ChangelogEntry
-from .memory.knowledge_graph import KnowledgeGraph
+from .planner import Planner
+from .progress import ProgressReporter
+from .reviewer import Reviewer
 from .tools.file_ops import FileOps
-from .tools.shell import Shell
 from .tools.git import Git
+from .tools.shell import Shell
 from .tools.test_runner import TestRunner
-from .training.data_collector import DataCollector, TrainingRow, CandidateRecord
-from .training.exemplar_library import ExemplarLibrary, Exemplar
-from .interfaces.obsidian_watcher import ObsidianWatcher
-from .interfaces.vault_sync import create_sync_adapter
-from .agents.intent_router import IntentRouter, Intent
-from .agents.abra import Abra, DeviceRegistry
+from .training.data_collector import CandidateRecord, DataCollector, TrainingRow
+from .training.exemplar_library import Exemplar, ExemplarLibrary
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -69,7 +79,18 @@ class Conductor:
         self._knowledge = KnowledgeGraph()
 
         # Agents
-        self._intent_router = IntentRouter(gateway_url=config.gateway_url)
+        self._bouncer = Bouncer(
+            routing_api_base=config.routing_api_base or config.gateway_url,
+            routing_api_key=config.routing_api_key or "",
+            routing_model=config.routing_model or "auto",
+        )
+        self._intent_router = IntentRouter(
+            gateway_url=config.gateway_url,
+            routing_model=config.routing_model or None,
+            routing_provider=config.routing_provider or None,
+            routing_api_key=config.routing_api_key or None,
+            routing_api_base=config.routing_api_base or None,
+        )
         self._abra = Abra(
             registry=DeviceRegistry(
                 alexa_map=config.ha_alexa_device_map or {},
@@ -90,6 +111,56 @@ class Conductor:
         # Training
         self._data_collector = DataCollector(config.training_data_dir)
         self._exemplar_library = ExemplarLibrary(config.exemplar_library_dir)
+
+        # Prompt management
+        from .prompts.prompt_manager import PromptManager
+        self._prompt_manager = PromptManager()
+
+        # Langfuse tracer (optional — no-ops if unavailable)
+        try:
+            from ..gateway.langfuse_tracer import tracer as _gateway_tracer
+            self._langfuse_tracer = _gateway_tracer
+        except Exception:
+            self._langfuse_tracer = None
+
+        # Progress reporter — sends live status to the dashboard
+        self._progress = ProgressReporter(
+            router_url=config.routing_api_base or "http://localhost:8100",
+            api_key=config.routing_api_key,
+        )
+
+        # Agent Factory — recipe registry + variant selector
+        self._recipe_registry = RecipeRegistry()
+        self._variant_selector = VariantSelector()
+
+        # Agent spawner — wraps gateway calls with contracts, tracing, exemplars
+        self._spawner = Spawner(
+            gateway_url=config.gateway_url,
+            prompt_manager=self._prompt_manager,
+            exemplar_library=self._exemplar_library,
+            langfuse_tracer=self._langfuse_tracer,
+            variant_selector=self._variant_selector,
+            recipe_registry=self._recipe_registry,
+        )
+
+        # Persistent surfaces
+        memory_dir = Path(config.obsidian_vault).parent / "memory"
+        self._apm = AgentPersonalityMatrix(memory_dir / "apm.yaml")
+        self._episodic_memory = EpisodicMemory(
+            dsn="postgresql://langfuse:langfuse@localhost:5432/conductor"
+        )
+        self._board = MessageBoard(config.obsidian_vault)
+        self._evolution = EvolutionHistory(memory_dir)
+
+        # Heartbeat — autonomous initiative loop
+        self._heartbeat = Heartbeat(
+            apm=self._apm,
+            episodic_memory=self._episodic_memory,
+            board=self._board,
+            evolution=self._evolution,
+            recipe_registry=self._recipe_registry,
+            interval_minutes=30,
+        )
 
         # Vault sync adapter (local, git, syncthing, or couchdb)
         sync_adapter = create_sync_adapter(
@@ -125,6 +196,16 @@ class Conductor:
         self._running = True
         loop = asyncio.get_running_loop()
 
+        # Configure shared gateway client
+        _gateway_auth.configure(self._config.gateway_url)
+
+        # Initialize persistent surfaces
+        self._apm.load()
+        try:
+            await self._episodic_memory.initialize()
+        except Exception as exc:
+            logger.warning("Episodic memory init failed (continuing without): %s", exc)
+
         # Start Obsidian watcher
         self._watcher.start(loop)
 
@@ -151,9 +232,13 @@ class Conductor:
         console.print(f"[bold green]Conductor started[/] — project: {self._config.project_id}")
         console.print(f"  Gateway: {self._config.gateway_url}")
         console.print(f"  Inbox: {self._config.obsidian_vault}/conductor/inbox/")
-        console.print(f"  Acceptance rate: {self._changelog.acceptance_rate():.0%}")
+        console.print(f"  Heartbeat: every {self._heartbeat._interval // 60} minutes")
+        console.print(f"  APM: {self._apm.identity.get('name', 'Conductor')}")
 
-        # Main loop
+        # Start heartbeat as background task
+        heartbeat_task = asyncio.create_task(self._heartbeat.start())
+
+        # Main loop (inbox watcher — reactive tasks)
         try:
             while self._running:
                 try:
@@ -166,17 +251,27 @@ class Conductor:
         except asyncio.CancelledError:
             pass
         finally:
+            self._heartbeat.stop()
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
             await self.stop()
 
     async def stop(self) -> None:
         """Shutdown gracefully."""
         self._running = False
         self._watcher.stop()
+        await self._bouncer.close()
         await self._intent_router.close()
         await self._abra.close()
+        await self._episodic_memory.close()
+        await self._progress.close()
         await self._planner.close()
         await self._coder.close()
         await self._reviewer.close()
+        await self._spawner.close()
         console.print("[bold yellow]Conductor stopped[/]")
 
     # ------------------------------------------------------------------
@@ -188,10 +283,71 @@ class Conductor:
         task_id = f"task-{uuid.uuid4().hex[:8]}"
         console.print(f"\n[bold blue]Processing:[/] {filename} ({task_id})")
 
+        # Determine lane after intent routing; default to background
+        lane = Lane.BACKGROUND
+        langfuse_trace_id = None
+
         try:
-            # Step 0: Intent routing (bouncer)
+            # Report: queued
+            await self._progress.update(task_id, "screening", filename=filename, current_step="Bouncer security screening")
+
+            # Step 0a: Bouncer — security screening (BEFORE intent routing)
+            console.print("  [dim]Screening input...[/]")
+            screening = await self._bouncer.screen(task_text)
+
+            if screening.risk_flags:
+                console.print(f"  [dim yellow]Flags: {', '.join(screening.risk_flags)}[/]")
+
+            if screening.verdict == Verdict.REJECT:
+                console.print(f"  [bold red]Bouncer REJECTED:[/] {screening.rejection_reason}")
+                await self._progress.update(task_id, "failed", filename=filename, current_step="Bouncer rejected", error=screening.rejection_reason)
+                await self._watcher.write_failed(
+                    filename,
+                    f"Rejected by security screening: {screening.rejection_reason}",
+                )
+                return
+
+            if screening.verdict == Verdict.CLARIFY:
+                console.print("  [bold yellow]Bouncer needs clarification[/]")
+                await self._progress.update(task_id, "failed", filename=filename, current_step="Needs clarification", error=screening.follow_up_question)
+                await self._watcher.write_failed(
+                    filename,
+                    f"Needs clarification before processing:\n\n{screening.follow_up_question}",
+                )
+                return
+
+            # Use the bouncer's sanitized/rewritten version
+            screened_text = screening.rewritten_prompt
+            console.print(f"  [dim green]Screening passed (confidence: {screening.confidence:.0%})[/]")
+
+            # Step 0b: Intent routing
+            await self._progress.update(task_id, "routing", filename=filename, current_step="Intent classification")
             console.print("  [dim]Routing intent...[/]")
-            routing = await self._intent_router.route(task_text)
+            routing = await self._intent_router.route(screened_text)
+
+            # Latency-sensitive intents get the live lane
+            if routing.intent in (Intent.CONVERSATION, Intent.HOME_AUTOMATION):
+                lane = Lane.LIVE
+
+            # Create a Langfuse trace for this entire task, tagged with lane
+            if self._langfuse_tracer:
+                try:
+                    from ..gateway.langfuse_tracer import _get_langfuse
+                    lf = _get_langfuse()
+                    if lf:
+                        trace = lf.trace(
+                            name=f"task:{task_id}",
+                            tags=[lane.value, routing.intent.value],
+                            metadata={
+                                "filename": filename,
+                                "intent": routing.intent.value,
+                                "lane": lane.value,
+                                "confidence": routing.confidence,
+                            },
+                        )
+                        langfuse_trace_id = trace.id
+                except Exception:
+                    pass
 
             if routing.intent == Intent.DENIED:
                 console.print(f"  [bold red]Denied:[/] {routing.denial_reason}")
@@ -201,31 +357,50 @@ class Conductor:
                 return
 
             if routing.intent == Intent.UNCLEAR:
-                console.print(f"  [bold yellow]Unclear intent — asking for clarification[/]")
+                console.print("  [bold yellow]Unclear intent — asking for clarification[/]")
                 await self._watcher.write_failed(
                     filename, f"Needs clarification:\n{routing.clarification_prompt}"
                 )
                 return
 
             if routing.intent == Intent.HOME_AUTOMATION:
-                console.print(f"  [bold cyan]Home automation → Abra[/]")
+                console.print("  [bold cyan]Home automation → Abra[/]")
                 await self._handle_home_automation(filename, routing)
                 return
 
             if routing.intent == Intent.ARTIFACT:
-                console.print(f"  [bold magenta]Artifact creation[/]")
-                # TODO: route to artifact agent when implemented
-                await self._watcher.write_failed(
-                    filename, f"Artifact creation not yet wired (agent: {routing.agent_name}). Task: {routing.rewritten_task}"
-                )
+                console.print("  [bold magenta]Artifact creation → LLM[/]")
+                await self._progress.update(task_id, "executing", filename=filename, current_step="Generating artifact")
+                try:
+                    answer = await _gateway_auth.gateway_chat(
+                        messages=[
+                            {"role": "system", "content": "You are a professional document creator. Produce well-structured, detailed artifacts (reports, specs, proposals, READMEs, design docs). Use markdown formatting."},
+                            {"role": "user", "content": screened_text},
+                        ],
+                        max_tokens=4096,
+                        temperature=0.5,
+                    )
+                    await self._progress.update(task_id, "completed", filename=filename, current_step="Artifact generated")
+                    await self._watcher.write_completed(filename, answer)
+                except Exception as exc:
+                    await self._progress.update(task_id, "failed", filename=filename, error=str(exc))
+                    await self._watcher.write_failed(filename, f"Artifact creation failed: {exc}")
                 return
 
             if routing.intent == Intent.CONVERSATION:
-                console.print(f"  [bold white]Conversation[/]")
-                # TODO: route to conversation handler
-                await self._watcher.write_failed(
-                    filename, f"Conversation handling not yet wired. Input: {task_text[:200]}"
-                )
+                console.print("  [bold white]Conversation → direct LLM response[/]")
+                await self._progress.update(task_id, "executing", filename=filename, current_step="Generating response")
+                try:
+                    answer = await _gateway_auth.gateway_chat(
+                        messages=[{"role": "user", "content": screened_text}],
+                        max_tokens=2048,
+                        temperature=0.7,
+                    )
+                    await self._progress.update(task_id, "completed", filename=filename, current_step="Response generated")
+                    await self._watcher.write_completed(filename, answer)
+                except Exception as exc:
+                    await self._progress.update(task_id, "failed", filename=filename, error=str(exc))
+                    await self._watcher.write_failed(filename, f"Conversation failed: {exc}")
                 return
 
             # CODE or ANALYSIS → existing pipeline
@@ -236,6 +411,7 @@ class Conductor:
             context = self._build_context()
 
             # Step 1: Plan
+            await self._progress.update(task_id, "planning", filename=filename, current_step="Decomposing task into subtasks")
             console.print("  [dim]Planning...[/]")
             plan = await self._planner.decompose(task_id, effective_task, context)
             self._layer1.start_task(effective_task, plan.summary)
@@ -245,14 +421,23 @@ class Conductor:
 
             console.print(f"  Plan: {len(plan.subtasks)} subtasks")
 
-            # Step 2: Execute each subtask
+            # Step 2: Execute each subtask (via spawner for tracing + contracts)
             all_passed = True
-            for subtask in plan.subtasks:
-                success = await self._execute_subtask(
+            total_subtasks = len(plan.subtasks)
+            for i, subtask in enumerate(plan.subtasks):
+                await self._progress.update(
+                    task_id, "executing", filename=filename,
+                    current_step=f"Subtask {i+1}/{total_subtasks}: {subtask.description[:60]}",
+                    steps_total=total_subtasks, steps_completed=i,
+                )
+                success = await self._execute_subtask_spawned(
                     task_id=task_id,
                     subtask_id=subtask.subtask_id,
                     description=subtask.description,
                     tier=subtask.tier,
+                    langfuse_trace_id=langfuse_trace_id,
+                    plan_summary=plan.summary,
+                    lane=lane,
                 )
                 if not success:
                     all_passed = False
@@ -260,14 +445,26 @@ class Conductor:
 
             # Step 3: Finalize
             if all_passed:
+                await self._progress.update(
+                    task_id, "completed", filename=filename,
+                    current_step="All subtasks passed",
+                    steps_total=total_subtasks, steps_completed=total_subtasks,
+                )
                 await self._watcher.write_completed(filename, f"Task {task_id} completed successfully.")
                 console.print(f"  [bold green]Completed:[/] {task_id}")
             else:
+                await self._progress.update(
+                    task_id, "failed", filename=filename,
+                    current_step="Subtask failed after retries",
+                    steps_total=total_subtasks, steps_completed=i,
+                    error="Subtask execution failed",
+                )
                 await self._watcher.write_failed(filename, f"Task {task_id} failed after retries.")
                 console.print(f"  [bold red]Failed:[/] {task_id}")
 
         except Exception as exc:
             logger.exception("Task %s failed with exception", task_id)
+            await self._progress.update(task_id, "failed", filename=filename, error=str(exc))
             await self._watcher.write_failed(filename, f"Exception: {exc}")
             console.print(f"  [bold red]Error:[/] {exc}")
 
@@ -320,83 +517,126 @@ class Conductor:
             summary_lines.append(f"  {call.domain}.{call.service}({call.entity_id})")
         await self._watcher.write_completed(filename, "\n".join(summary_lines))
 
-    async def _execute_subtask(
+    async def _execute_subtask_spawned(
         self,
         *,
         task_id: str,
         subtask_id: str,
         description: str,
         tier: int,
+        langfuse_trace_id: str | None = None,
+        plan_summary: str = "",
+        lane: Lane = Lane.BACKGROUND,
     ) -> bool:
-        """Execute a single subtask with retry loop."""
+        """Execute a subtask via the spawner (coder → reviewer pipeline).
+
+        Uses AgentSpec/AgentOutput contracts with Langfuse trace propagation,
+        exemplar injection, and PromptManager integration.
+        """
         self._layer1.start_subtask(subtask_id)
-        context = self._build_context()
+        self._build_context()  # Side effect: updates internal state
+
+        # Build context dict from memory layers
+        context_dict = {
+            "layer0": self._layer0.build_prompt_section(),
+            "layer1": self._layer1.build_prompt_section(),
+            "layer2": self._layer2.build_prompt_section(),
+            "knowledge": self._knowledge.build_prompt_section(),
+        }
 
         for attempt in range(self._config.max_retries + 1):
             console.print(
-                f"    [{subtask_id}] Tier {tier}, attempt {attempt + 1}"
+                f"    [{subtask_id}] Tier {tier}, attempt {attempt + 1} (spawned)"
             )
 
-            # Generate candidates
-            coder_result = await self._coder.generate(
+            # --- Coder agent ---
+            coder_spec = AgentSpec(
+                role=AgentRole.CODER,
+                task_id=task_id,
                 subtask_id=subtask_id,
-                subtask_description=description,
-                context=context,
-                tier=tier,
+                description=description,
+                attempt=attempt + 1,
                 project_id=self._config.project_id,
+                context=context_dict,
+                upstream_outputs={"planner": plan_summary},
+                tier=tier,
+                parallel_generations=tier if tier <= 3 else 1,
+                exemplar_task_type=self._classify_task(description),
+                lane=lane,
+                langfuse_trace_id=langfuse_trace_id,
             )
 
-            if not coder_result.candidates:
-                console.print(f"    [red]No candidates generated[/]")
-                if coder_result.errors:
-                    console.print(f"    Errors: {coder_result.errors}")
-                continue
+            coder_output = await self._spawner.spawn(coder_spec)
 
-            # Review candidates
-            candidate_texts = [c.content for c in coder_result.candidates]
-            review = await self._reviewer.review(
-                subtask_id=subtask_id,
-                subtask_description=description,
-                candidates=candidate_texts,
-                context=context,
-            )
-
-            console.print(
-                f"    Selected candidate {review.selected_idx} "
-                f"(score={review.selected_score:.1f})"
-            )
-
-            # Check threshold
-            if review.selected_score < self._reviewer.accept_threshold:
-                console.print(f"    [yellow]Below threshold ({self._reviewer.accept_threshold})[/]")
-                self._layer1.add_feedback(review.feedback_summary)
-
-                # Escalate tier on retry
+            if not coder_output.success:
+                console.print(f"    [red]Coder failed:[/] {coder_output.error}")
+                if coder_output.error_type and coder_output.error_type not in RECOVERABLE_ERRORS:
+                    self._layer1.fail_subtask(subtask_id, coder_output.error or "Non-recoverable error")
+                    return False
                 if tier < 3:
                     tier += 1
                     console.print(f"    Escalating to Tier {tier}")
-
-                # Record training data even for failures
-                self._record_training(
-                    task_id, subtask_id, tier, coder_result, review, False, ""
-                )
                 continue
 
-            # Apply the selected candidate
-            selected_content = candidate_texts[review.selected_idx]
-            self._apply_candidate(selected_content)
+            if not coder_output.output:
+                console.print("    [red]Coder returned empty output[/]")
+                continue
+
+            # --- Reviewer agent ---
+            reviewer_spec = AgentSpec(
+                role=AgentRole.REVIEWER,
+                task_id=task_id,
+                subtask_id=subtask_id,
+                description=description,
+                attempt=attempt + 1,
+                context=context_dict,
+                upstream_outputs={
+                    "planner": plan_summary,
+                    "coder": coder_output.output,
+                },
+                tier=min(tier, 2),  # reviewer doesn't need high tier
+                lane=lane,
+                langfuse_trace_id=langfuse_trace_id,
+            )
+
+            reviewer_output = await self._spawner.spawn(reviewer_spec)
+
+            # Parse reviewer scores
+            review_data = reviewer_output.output_parsed or {}
+            selected_score = 5.0
+            selected_idx = 0
+            feedback_summary = ""
+
+            if review_data:
+                scores = review_data.get("scores", [])
+                selected_idx = review_data.get("selected_idx") or 0
+                feedback_summary = review_data.get("feedback_summary", "")
+                if scores and isinstance(selected_idx, int) and 0 <= selected_idx < len(scores):
+                    selected_score = scores[selected_idx].get("overall", 5.0)
+
+            console.print(
+                f"    Reviewer score: {selected_score:.1f} "
+                f"({reviewer_output.duration_ms:.0f}ms)"
+            )
+
+            # Check threshold
+            if selected_score < self._reviewer.accept_threshold:
+                console.print(f"    [yellow]Below threshold ({self._reviewer.accept_threshold})[/]")
+                self._layer1.add_feedback(feedback_summary or "Below quality threshold")
+
+                if tier < 3:
+                    tier += 1
+                    console.print(f"    Escalating to Tier {tier}")
+                continue
+
+            # Apply the code
+            self._apply_candidate(coder_output.output)
 
             # Run tests
             test_result = await self._test_runner.run()
             console.print(
                 f"    Tests: {'PASS' if test_result.success else 'FAIL'} "
                 f"({test_result.tests_passed}/{test_result.tests_total})"
-            )
-
-            # Record training data
-            self._record_training(
-                task_id, subtask_id, tier, coder_result, review,
-                test_result.success, test_result.output[:200],
             )
 
             if test_result.success:
@@ -407,37 +647,33 @@ class Conductor:
                         project_id=self._config.project_id,
                         description=description,
                         tier_used=tier,
-                        candidates_generated=len(coder_result.candidates),
-                        accepted_candidate_idx=review.selected_idx,
-                        reviewer_score=review.selected_score,
+                        candidates_generated=1,
+                        accepted_candidate_idx=selected_idx,
+                        reviewer_score=selected_score,
                         test_passed=True,
                         retries=attempt,
                     )
                 )
 
                 # Store as exemplar if score is high enough
-                if review.selected_score >= 8.0:
+                if selected_score >= 8.0:
                     self._exemplar_library.add(
                         Exemplar(
                             task_type=self._classify_task(description),
                             description=description[:200],
                             prompt=description,
-                            solution=selected_content[:2000],
-                            reviewer_score=review.selected_score,
+                            solution=coder_output.output[:2000],
+                            reviewer_score=selected_score,
                             project_id=self._config.project_id,
                             tags=[],
                         )
                     )
 
-                self._layer1.complete_subtask(
-                    subtask_id, selected_content[:100]
-                )
+                self._layer1.complete_subtask(subtask_id, coder_output.output[:100])
                 return True
 
             # Test failed — add feedback and retry
-            self._layer1.add_feedback(
-                f"Tests failed: {test_result.output[:200]}"
-            )
+            self._layer1.add_feedback(f"Tests failed: {test_result.output[:200]}")
             if tier < 3:
                 tier += 1
 
@@ -464,28 +700,106 @@ class Conductor:
     # ------------------------------------------------------------------
 
     def _apply_candidate(self, content: str) -> bool:
-        """Apply a code candidate to the project files."""
-        # Parse the candidate output for file operations
-        # Convention: === NEW FILE: path === or unified diff
+        """Apply a code candidate to the project files.
+
+        Handles two formats:
+        1. === NEW FILE: path === blocks (full file content)
+        2. Unified diff format (--- a/path, +++ b/path, @@ hunks)
+
+        Returns False if no changes were applied (prevents silent no-ops).
+        """
         lines = content.splitlines()
+        files_written = 0
+
+        # Try format 1: === NEW FILE: path === blocks
         current_file: str | None = None
         current_content: list[str] = []
 
         for line in lines:
             if line.startswith("=== NEW FILE:") and line.endswith("==="):
-                # Flush previous
                 if current_file:
-                    self._file_ops.write(current_file, "\n".join(current_content))
+                    result = self._file_ops.write(current_file, "\n".join(current_content))
+                    if result.success:
+                        files_written += 1
                 current_file = line.split(":", 1)[1].rsplit("===", 1)[0].strip()
                 current_content = []
             elif current_file is not None:
                 current_content.append(line)
 
-        # Flush last file
         if current_file:
-            self._file_ops.write(current_file, "\n".join(current_content))
+            result = self._file_ops.write(current_file, "\n".join(current_content))
+            if result.success:
+                files_written += 1
 
-        return True
+        if files_written > 0:
+            logger.info("Applied candidate: %d file(s) written", files_written)
+            return True
+
+        # Try format 2: unified diff via unidiff library (MIT license)
+        try:
+            from unidiff import PatchSet
+
+            patch = PatchSet(content)
+            if not patch:
+                logger.warning("Candidate applied nothing — no recognized file format")
+                return False
+
+            patches_applied = 0
+            for patched_file in patch:
+                path = patched_file.path
+                # Strip a/ b/ prefixes
+                if path.startswith("b/"):
+                    path = path[2:]
+
+                if patched_file.is_added_file:
+                    # New file — write full content
+                    new_content = "".join(
+                        line.value for hunk in patched_file for line in hunk
+                        if line.is_added or line.is_context
+                    )
+                    result = self._file_ops.write(path, new_content)
+                    if result.success:
+                        patches_applied += 1
+                        logger.info("Created new file: %s", path)
+                else:
+                    # Existing file — apply hunks
+                    read_result = self._file_ops.read(path)
+                    if not read_result.success:
+                        logger.warning("Cannot read %s for patching: %s", path, read_result.message)
+                        continue
+
+                    original = read_result.message.splitlines(keepends=True)
+                    patched = list(original)
+                    offset = 0
+
+                    for hunk in patched_file:
+                        start = hunk.source_start - 1 + offset
+                        # Remove source lines, insert target lines
+                        source_len = hunk.source_length
+                        target_lines = [
+                            line.value for line in hunk
+                            if line.is_added or line.is_context
+                        ]
+                        patched[start:start + source_len] = target_lines
+                        offset += len(target_lines) - source_len
+
+                    if patched != original:
+                        write_result = self._file_ops.write(path, "".join(patched))
+                        if write_result.success:
+                            patches_applied += 1
+                            logger.info("Patched %s (%d hunks)", path, len(patched_file))
+
+            if patches_applied > 0:
+                logger.info("Applied candidate: %d file(s) patched", patches_applied)
+                return True
+
+        except ImportError:
+            logger.warning("unidiff not installed — cannot apply diff format")
+        except Exception as exc:
+            logger.debug("Diff parsing failed (may not be diff format): %s", exc)
+
+        logger.warning("Candidate applied nothing — no recognized file format")
+        return False
 
     # ------------------------------------------------------------------
     # Training data
@@ -547,17 +861,17 @@ class Conductor:
     async def _load_project_context(self) -> None:
         """Load/reload project context into the gateway."""
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
-                    f"{self._config.gateway_url}/v1/project/load",
-                    json={
-                        "project_id": self._config.project_id,
-                        "layer0_text": self._layer0.content,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                console.print(f"  Context loaded: {data.get('action', 'unknown')}")
+            client = await _gateway_auth.gateway_client()
+            resp = await client.post(
+                "/v1/project/load",
+                json={
+                    "project_id": self._config.project_id,
+                    "layer0_text": self._layer0.content,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            console.print(f"  Context loaded: {data.get('action', 'unknown')}")
         except Exception as exc:
             logger.error("Failed to load project context: %s", exc)
 

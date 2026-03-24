@@ -165,12 +165,12 @@ class UltraThink:
     ) -> UltraThinkResult:
         """Local llama-server path: slot pinning + KV cache restore."""
         n = len(profiles)
-        workers = await self._slots.acquire_workers(n)
+        workers = await self._slots.acquire_workers(n)  # type: ignore[union-attr]
         try:
             # Restore template cache into all workers (parallel)
             restore_start = time.monotonic()
             if project_id:
-                await self._slots.restore_workers_parallel(project_id, workers)
+                await self._slots.restore_workers_parallel(project_id, workers)  # type: ignore[union-attr]
             restore_ms = (time.monotonic() - restore_start) * 1000
 
             # Fire all generations concurrently
@@ -199,7 +199,7 @@ class UltraThink:
                 total_start=total_start,
             )
         finally:
-            self._slots.release_workers(workers)
+            self._slots.release_workers(workers)  # type: ignore[union-attr]
 
     async def _generate_api(
         self,

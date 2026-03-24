@@ -29,9 +29,15 @@ class FileOps:
         self._root = Path(project_dir).resolve()
 
     def _resolve(self, path: str) -> Path:
-        """Resolve a path relative to project root, preventing escapes."""
+        """Resolve a path relative to project root, preventing escapes.
+
+        Uses os.path.commonpath instead of string startswith to prevent
+        sibling-prefix bypass (e.g., /root/proj2 vs /root/proj).
+        """
         resolved = (self._root / path).resolve()
-        if not str(resolved).startswith(str(self._root)):
+        try:
+            resolved.relative_to(self._root)
+        except ValueError:
             raise ValueError(f"Path escapes project root: {path}")
         return resolved
 

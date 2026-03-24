@@ -1,0 +1,140 @@
+# Conductor Helm Values
+# Override per environment: values-homelab.yaml, values-staging.yaml, values-prod.yaml
+
+# ── Global ───────────────────────────────────
+global:
+  tenantId: "homelab"
+  namespace: "conductor"
+
+# ── Images ───────────────────────────────────
+image:
+  repository: ghcr.io/project-maistro/conductor
+  tag: "0.1.0"
+  # digest: "sha256:abc123..."  # Uncomment for production pinning (CKV_K8S_43)
+  pullPolicy: Always
+
+# ── Gateway ──────────────────────────────────
+gateway:
+  replicas: 1
+  port: 9090
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ── Orchestrator ─────────────────────────────
+orchestrator:
+  replicas: 1  # Single instance per tenant (heartbeat coordination)
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# ── Router ───────────────────────────────────
+router:
+  replicas: 2  # Stateless, can scale horizontally
+  port: 8100
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ── Database ─────────────────────────────────
+database:
+  # Use external PG in production, internal in dev
+  external: false
+  # External PG connection (when external: true)
+  host: ""
+  port: 5432
+  name: "conductor"
+  user: "conductor"
+  # Password from secret ref (never in values)
+  existingSecret: "conductor-db-credentials"
+  existingSecretKey: "password"
+  # Internal PG (when external: false)
+  internal:
+    image: postgres:17
+    storage: 10Gi
+    storageClass: ""
+
+# ── Auth ─────────────────────────────────────
+auth:
+  mode: "apikey"  # apikey | oidc | k8s | none
+  # API key (for homelab / dev)
+  apiKeySecret: "conductor-api-key"
+  apiKeySecretKey: "key"
+  # OIDC (for production — provider agnostic)
+  oidc:
+    issuer: ""          # https://login.microsoftonline.com/{tenant}/v2.0
+    audience: ""        # api://conductor
+    jwksUri: ""         # Auto-discovered if empty
+    claimOrg: "org_id"
+    claimTeam: "group"
+    claimRoles: "roles"
+
+# ── Secrets Backend ──────────────────────────
+secrets:
+  backend: "env"  # env | kubernetes | vaultwarden | vault
+  # Kubernetes backend
+  kubernetes:
+    mountPath: "/var/run/secrets/conductor"
+  # Vaultwarden backend
+  vaultwarden:
+    url: ""
+    tokenSecret: ""
+  # External vault (HashiCorp, etc.)
+  vault:
+    url: ""
+    tokenSecret: ""
+    pathTemplate: "/v1/secret/data/{name}"
+    valueJsonPath: "data.data.value"
+
+# ── LiteLLM ──────────────────────────────────
+litellm:
+  enabled: true
+  url: "http://litellm:4000"
+  masterKeySecret: "litellm-master-key"
+
+# ── Langfuse ─────────────────────────────────
+langfuse:
+  enabled: true
+  url: "http://langfuse:3000"
+
+# ── Heartbeat ────────────────────────────────
+heartbeat:
+  intervalMinutes: 30
+  # Standing orders are defined in APM, not here
+
+# ── Skills ───────────────────────────────────
+skills:
+  # Skill scanning enabled by default
+  scanningEnabled: true
+  # Built-in skills mounted from ConfigMap
+  builtinConfigMap: "conductor-builtin-skills"
+
+# ── Ingress ──────────────────────────────────
+ingress:
+  enabled: false
+  className: "nginx"  # or "traefik"
+  annotations: {}
+  hosts:
+    - host: conductor.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ── Monitoring ───────────────────────────────
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: 30s

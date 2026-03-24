@@ -1,0 +1,20 @@
+# Core
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+httpx>=0.28.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+pyyaml>=6.0.0
+rich>=13.0.0
+
+# Database
+asyncpg>=0.31.0
+
+# Memory / NLP
+watchdog>=4.0.0
+
+# Observability (optional — graceful no-ops if missing)
+langfuse>=2.0.0
+
+# Auth (optional — needed for OIDC mode)
+# pyjwt[crypto]>=2.8.0

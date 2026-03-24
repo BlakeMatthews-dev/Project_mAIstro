@@ -106,9 +106,18 @@ elif [[ -x "$SCRIPT_DIR/build/bin/llama-server" ]]; then
 else
   info "Building ik_llama.cpp inference engine..."
 
-  # Check for CUDA
+  # Find CUDA toolkit (check PATH, then common install locations)
   if ! command -v nvcc >/dev/null 2>&1; then
-    warn "nvcc not found — CUDA build may fail. Make sure CUDA toolkit is in PATH."
+    for d in /usr/local/cuda/bin /usr/local/cuda-*/bin; do
+      if [[ -x "$d/nvcc" ]]; then
+        export PATH="$d:$PATH"
+        info "Found CUDA toolkit at $d"
+        break
+      fi
+    done
+  fi
+  if ! command -v nvcc >/dev/null 2>&1; then
+    warn "nvcc not found — building CPU-only. Install CUDA toolkit for GPU support."
   fi
 
   if ! command -v cmake >/dev/null 2>&1; then
@@ -124,12 +133,19 @@ else
     ok "ik_llama.cpp source already present"
   fi
 
-  info "Configuring cmake (sm_61 for Tesla P40)..."
-  cmake -S "$IK_LLAMA_DIR" -B "$IK_LLAMA_DIR/build" \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DGGML_CUDA=ON \
-    -DCMAKE_CUDA_ARCHITECTURES="61" \
-    -DCMAKE_BUILD_TYPE=Release
+  # Build cmake flags — CUDA if available, CPU-only otherwise
+  CMAKE_FLAGS=(-DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release)
+  if command -v nvcc >/dev/null 2>&1; then
+    NVCC_PATH=$(command -v nvcc)
+    # Detect compute capability from nvidia-smi, default to 61 (P40/Pascal)
+    COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.' || echo "61")
+    COMPUTE_CAP="${COMPUTE_CAP:-61}"
+    CMAKE_FLAGS+=(-DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER="$NVCC_PATH" -DCMAKE_CUDA_ARCHITECTURES="$COMPUTE_CAP")
+    info "Configuring cmake with CUDA (compute capability: $COMPUTE_CAP)..."
+  else
+    info "Configuring cmake (CPU-only, no CUDA)..."
+  fi
+  cmake -S "$IK_LLAMA_DIR" -B "$IK_LLAMA_DIR/build" "${CMAKE_FLAGS[@]}"
 
   info "Building (this may take a few minutes)..."
   cmake --build "$IK_LLAMA_DIR/build" --config Release -j"$(nproc)" \
@@ -182,7 +198,16 @@ else
   # Extract the glob pattern from hardware profile comment
   DOWNLOAD_GLOB=$(grep 'huggingface-cli download' "$PROFILE" 2>/dev/null | grep -oP '(?<=--include ")[^"]+' || echo "*UD-Q4_K_XL*")
 
-  HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download \
+  # Use 'hf' CLI (huggingface_hub >= 1.0 renamed huggingface-cli → hf)
+  HF_CLI="$SCRIPT_DIR/.venv/bin/hf"
+  if [[ ! -x "$HF_CLI" ]]; then
+    HF_CLI="$SCRIPT_DIR/.venv/bin/huggingface-cli"
+  fi
+  if [[ ! -x "$HF_CLI" ]]; then
+    fail "Neither 'hf' nor 'huggingface-cli' found in .venv/bin/"
+  fi
+
+  HF_HUB_ENABLE_HF_TRANSFER=1 "$HF_CLI" download \
     unsloth/Qwen3-Coder-Next-GGUF \
     --include "$DOWNLOAD_GLOB" \
     --local-dir "$MODEL_DIR"
@@ -198,7 +223,28 @@ mkdir -p "$SCRIPT_DIR/data/training"
 mkdir -p "$SCRIPT_DIR/data/exemplars"
 ok "Data directories ready"
 
-# ── Step 7: CouchDB (optional) ─────────────────────────────────────
+# ── Step 7: Docker services (Langfuse v3 + OpenWebUI) ─────────
+if command -v docker >/dev/null 2>&1 && [[ -f "$SCRIPT_DIR/docker-compose.yml" ]]; then
+  if docker compose ps --format '{{.Names}}' 2>/dev/null | grep -q conductor; then
+    ok "Docker services already running"
+  else
+    info "Starting infrastructure services (Langfuse v3 + OpenWebUI)..."
+    if [[ ! -f "$SCRIPT_DIR/.env" ]] && [[ -f "$SCRIPT_DIR/.env.example" ]]; then
+      info "Copying .env.example → .env (edit with real secrets for production)"
+      cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
+    fi
+    if [[ -f "$SCRIPT_DIR/.env" ]]; then
+      docker compose up -d 2>&1 | tail -5
+      ok "Docker services starting (Langfuse at :3100, OpenWebUI at :3200)"
+    else
+      warn "No .env file — skipping Docker services"
+    fi
+  fi
+else
+  info "Docker not found or no docker-compose.yml — skipping infrastructure services"
+fi
+
+# ── Step 8: CouchDB (optional) ─────────────────────────────────────
 if [[ "$WITH_COUCHDB" == true ]] && [[ "$SKIP_COUCHDB" != true ]]; then
   if command -v docker >/dev/null 2>&1; then
     info "Starting CouchDB via docker compose..."
@@ -232,7 +278,7 @@ elif [[ "$WITH_COUCHDB" != true ]]; then
   info "CouchDB setup skipped (use --with-couchdb to enable)"
 fi
 
-# ── Step 8: Validate project config ────────────────────────────────
+# ── Step 9: Validate project config ────────────────────────────────
 EXAMPLE_CONFIG="$SCRIPT_DIR/projects/example/conductor.yaml"
 if [[ -f "$EXAMPLE_CONFIG" ]]; then
   if grep -q '/path/to/repo' "$EXAMPLE_CONFIG"; then
@@ -245,7 +291,7 @@ if [[ -f "$EXAMPLE_CONFIG" ]]; then
   fi
 fi
 
-# ── Step 9: Summary ────────────────────────────────────────────────
+# ── Step 10: Summary ───────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════╗"
 echo "║           Setup Complete                 ║"

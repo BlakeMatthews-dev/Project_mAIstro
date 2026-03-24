@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-orchestrator
+  labels:
+    app.kubernetes.io/name: conductor-orchestrator
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: orchestrator
+spec:
+  replicas: {{ .Values.orchestrator.replicas }}
+  # Orchestrator is singleton per tenant — use Recreate strategy
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: conductor-orchestrator
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: conductor-orchestrator
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: orchestrator
+    spec:
+      serviceAccountName: {{ .Release.Name }}-conductor
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: orchestrator
+          {{- if .Values.image.digest }}
+          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+          {{- else }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command: ["python", "-m", "orchestrator.conductor", "--project", {{ .Values.global.tenantId | quote }}, "--config", "/config/conductor.yaml"]
+          env:
+            - name: CONDUCTOR_TENANT_ID
+              value: {{ .Values.global.tenantId | quote }}
+            - name: CONDUCTOR_DATABASE_URL
+              {{- if .Values.database.external }}
+              value: "postgresql://{{ .Values.database.user }}:$(DB_PASSWORD)@{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}"
+              {{- else }}
+              value: "postgresql://conductor:$(DB_PASSWORD)@{{ .Release.Name }}-db:5432/conductor"
+              {{- end }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.existingSecretKey }}
+            - name: CONDUCTOR_SECRETS_BACKEND
+              value: {{ .Values.secrets.backend | quote }}
+            - name: CONDUCTOR_AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
+            - name: CONDUCTOR_INFERENCE_PROVIDER
+              value: "openai"
+            - name: CONDUCTOR_INFERENCE_API_BASE
+              value: "http://{{ .Release.Name }}-router:8100/v1"
+            - name: CONDUCTOR_INFERENCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.apiKeySecret }}
+                  key: {{ .Values.auth.apiKeySecretKey }}
+            {{- if .Values.auth.oidc.issuer }}
+            - name: CONDUCTOR_OIDC_ISSUER
+              value: {{ .Values.auth.oidc.issuer | quote }}
+            - name: CONDUCTOR_OIDC_AUDIENCE
+              value: {{ .Values.auth.oidc.audience | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+            {{- if eq .Values.secrets.backend "kubernetes" }}
+            - name: secrets
+              mountPath: {{ .Values.secrets.kubernetes.mountPath }}
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import sys; sys.exit(0)"]
+            initialDelaySeconds: 15
+            periodSeconds: 60
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["python", "-c", "import sys; sys.exit(0)"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.orchestrator.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-data
+        {{- if eq .Values.secrets.backend "kubernetes" }}
+        - name: secrets
+          secret:
+            secretName: {{ .Release.Name }}-secrets
+        {{- end }}

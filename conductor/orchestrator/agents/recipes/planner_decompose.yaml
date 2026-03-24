@@ -1,0 +1,17 @@
+name: planner.decompose
+role: planner
+description: "Decompose complex tasks into ordered subtasks"
+prompt_name: planner.decompose
+prompt_variants:
+  - production
+  - v2-structured
+result_schema: schemas.PlanOutput
+tools:
+  - file_ops.read
+  - file_ops.list
+min_tier: 2
+max_tier: 3
+temperature: 0.5
+max_tokens: 2048
+min_samples_before_selection: 30
+exploration_rate: 0.15

@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Conductor Router",
+        "description": "Enter the Conductor Router URL and API key. The router handles intelligent model selection and tool dispatch.",
+        "data": {
+          "url": "Conductor Router URL",
+          "api_key": "API Key",
+          "model": "Model (use 'auto' for intelligent routing)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to Conductor Router. Check the URL.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "Conductor Agent is already configured."
+    }
+  }
+}

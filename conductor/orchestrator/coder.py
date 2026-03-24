@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-import httpx
+from . import _gateway_auth
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +51,7 @@ Rules:
 class Coder:
     def __init__(self, gateway_url: str) -> None:
         self._gateway_url = gateway_url
-        self._client = httpx.AsyncClient(
-            base_url=gateway_url,
-            timeout=300,
-        )
+        self._gateway_url = gateway_url
 
     async def generate(
         self,
@@ -70,7 +67,8 @@ class Coder:
 
         prompt = f"## Subtask\n{subtask_description}"
 
-        resp = await self._client.post(
+        client = await _gateway_auth.gateway_client()
+        resp = await client.post(
             "/v1/ultra-think",
             json={
                 "task_id": subtask_id,
@@ -104,4 +102,4 @@ class Coder:
         )
 
     async def close(self) -> None:
-        await self._client.aclose()
+        pass  # Shared client closed by conductor

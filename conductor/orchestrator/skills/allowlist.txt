@@ -1,0 +1,8 @@
+# Conductor Skill Allowlist — Manually reviewed community skills
+# One skill name per line. Skills on this list get T1 (full capabilities).
+# ONLY add a skill here after reviewing its SKILL.md for injection patterns.
+#
+# Format: skill-name  (must match the 'name' field in SKILL.md frontmatter)
+#
+# To review a skill before allowlisting:
+#   python -m orchestrator.skills.scanner <path-to-SKILL.md>

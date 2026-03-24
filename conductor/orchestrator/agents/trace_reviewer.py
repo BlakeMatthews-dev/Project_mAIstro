@@ -21,7 +21,6 @@ import argparse
 import asyncio
 import json
 import logging
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -146,9 +145,9 @@ class TraceReviewer:
                 return findings, 0
 
             # Analyze generation latencies
-            latencies = []
+            # latencies collection removed (unused)
             failures = []
-            scores_by_dim = {"correctness": [], "quality": [], "safety": [], "completeness": []}
+            scores_by_dim: dict[str, list[float]] = {"correctness": [], "quality": [], "safety": [], "completeness": []}
 
             for trace in traces.data:
                 trace_count += 1
@@ -191,6 +190,10 @@ class TraceReviewer:
                             recommendation=f"Review the {dim} dimension in reviewer prompts. Consider adjusting prompt template 'reviewer.score'.",
                         ))
 
+            # Variant-aware analysis: score breakdown per prompt variant
+            variant_findings = self._analyze_variant_performance(lf, traces)
+            findings.extend(variant_findings)
+
         except Exception as exc:
             logger.warning("Langfuse trace review failed: %s", exc)
             findings.append(ReviewFinding(
@@ -201,6 +204,69 @@ class TraceReviewer:
             ))
 
         return findings, trace_count
+
+    def _analyze_variant_performance(
+        self, lf, traces
+    ) -> list[ReviewFinding]:
+        """Analyze performance breakdown by prompt variant.
+
+        Feeds into PromptEvolver by identifying which variants underperform.
+        """
+        findings: list[ReviewFinding] = []
+        variant_scores: dict[str, list[float]] = {}
+
+        try:
+            for trace in traces:
+                metadata = trace.metadata or {}
+                variant = metadata.get("variant")
+                if not variant:
+                    continue
+
+                try:
+                    trace_scores = lf.client.score.get_by_trace(trace.id)
+                    for score in trace_scores:
+                        if score.name == "variant_score":
+                            variant_scores.setdefault(variant, []).append(score.value)
+                except Exception:
+                    pass
+
+            # Report per-variant performance
+            if len(variant_scores) > 1:
+                summary_parts = []
+                for variant, scores in sorted(variant_scores.items()):
+                    avg = sum(scores) / len(scores) if scores else 0
+                    summary_parts.append(f"{variant}: {avg:.1f} avg ({len(scores)} runs)")
+
+                findings.append(ReviewFinding(
+                    category="prompt",
+                    severity="info",
+                    title="Variant performance breakdown",
+                    description="Score comparison across prompt variants",
+                    evidence=summary_parts,
+                    recommendation="Feed into PromptEvolver for automated variant selection and promotion.",
+                ))
+
+                # Flag underperforming variants
+                all_scores = [s for scores in variant_scores.values() for s in scores]
+                global_avg = sum(all_scores) / len(all_scores) if all_scores else 0
+                for variant, scores in variant_scores.items():
+                    avg = sum(scores) / len(scores) if scores else 0
+                    if avg < global_avg - 1.0 and len(scores) >= 10:
+                        findings.append(ReviewFinding(
+                            category="prompt",
+                            severity="warning",
+                            title=f"Underperforming variant: {variant}",
+                            description=(
+                                f"Variant '{variant}' averages {avg:.1f} vs "
+                                f"global {global_avg:.1f} over {len(scores)} runs"
+                            ),
+                            recommendation=f"Consider demoting or replacing variant '{variant}'.",
+                        ))
+
+        except Exception as exc:
+            logger.debug("Variant analysis failed: %s", exc)
+
+        return findings
 
     def _review_training_data(
         self, start: datetime, end: datetime
@@ -420,7 +486,7 @@ class TraceReviewer:
             f"**Traces analyzed:** {report.traces_analyzed}",
             f"**Conversations analyzed:** {report.conversations_analyzed}",
             "",
-            f"## Summary",
+            "## Summary",
             "",
             report.summary,
             "",
@@ -498,16 +564,16 @@ async def main():
     )
 
     report = await reviewer.review(since=since)
-    print(f"\n{report.summary}")
-    print(f"  Findings: {len(report.findings)}")
+    logger.info(f"\n{report.summary}")
+    logger.info(f"  Findings: {len(report.findings)}")
 
     actions = [f for f in report.findings if f.severity == "action"]
     if actions:
-        print(f"\n  Action items:")
+        print("\n  Action items:")
         for a in actions:
-            print(f"    - [{a.category}] {a.title}")
+            logger.info(f"    - [{a.category}] {a.title}")
 
-    print(f"\n  Report: {args.output}/")
+    logger.info(f"\n  Report: {args.output}/")
 
 
 if __name__ == "__main__":

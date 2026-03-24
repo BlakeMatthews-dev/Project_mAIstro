@@ -58,10 +58,26 @@ class TestRunner:
         result = await self._shell.run(command)
 
         output = result.stdout + ("\n" + result.stderr if result.stderr else "")
+
+        # If the shell command itself failed (blocked, timeout, error),
+        # do NOT treat zero counts as success — that's a false positive.
+        if not result.success:
+            return TestResult(
+                success=False,
+                framework=framework,
+                output=output,
+                tests_passed=0,
+                tests_failed=0,
+                tests_total=0,
+            )
+
         passed, failed, total = self._parse_counts(output, framework)
 
+        # pytest exit code 0 with no collected tests = success (empty test suite)
+        success = failed == 0
+
         return TestResult(
-            success=result.success,
+            success=success,
             framework=framework,
             output=output,
             tests_passed=passed,

@@ -17,7 +17,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-import httpx
+from . import _gateway_auth
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +71,6 @@ Respond in this exact JSON format:
 class Planner:
     def __init__(self, gateway_url: str) -> None:
         self._gateway_url = gateway_url
-        self._client = httpx.AsyncClient(
-            base_url=gateway_url,
-            timeout=120,
-        )
 
     async def decompose(
         self,
@@ -89,7 +85,8 @@ class Planner:
         messages.append({"role": "system", "content": PLANNER_SYSTEM_PROMPT})
         messages.append({"role": "user", "content": task_text})
 
-        resp = await self._client.post(
+        client = await _gateway_auth.gateway_client()
+        resp = await client.post(
             "/v1/chat/completions",
             json={
                 "model": "conductor",
@@ -161,4 +158,4 @@ class Planner:
         )
 
     async def close(self) -> None:
-        await self._client.aclose()
+        pass  # Shared client closed by conductor

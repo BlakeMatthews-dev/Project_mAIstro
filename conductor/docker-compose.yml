@@ -1,76 +1,257 @@
-# Conductor Phase 0 — Infrastructure Services
+# Conductor — Infrastructure Services (Langfuse v3 + OpenWebUI)
 #
 # Usage:
-#   docker compose up -d couchdb               # CouchDB only
-#   docker compose up -d langfuse-server        # Langfuse only
 #   docker compose up -d                        # Everything
+#   docker compose up -d open-webui             # OpenWebUI only
+#   docker compose up -d langfuse-web           # Langfuse + all deps
+#   docker compose logs -f open-webui           # OpenWebUI logs
 #
 # UIs:
-#   CouchDB:  http://localhost:5984/_utils/
-#   Langfuse: http://localhost:3100
+#   OpenWebUI: http://localhost:3200
+#   Langfuse:  http://localhost:3100
+#   MinIO:     http://localhost:9081  (admin console)
+#
+# Data stored on /mnt/storage/conductor/ (23 TB) to avoid filling root partition.
+# All containers use apparmor:unconfined to work around Proxmox Docker restrictions.
 
 services:
 
-  # ── CouchDB (Obsidian LiveSync) ──────────────────────────────────
-  couchdb:
-    image: couchdb:3
-    container_name: conductor-couchdb
-    restart: unless-stopped
-    ports:
-      - "5984:5984"
-    environment:
-      COUCHDB_USER: ${COUCHDB_USER:-admin}
-      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:-conductor}
-    volumes:
-      - couchdb_data:/opt/couchdb/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5984/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # NOTE: CouchDB for Obsidian LiveSync runs in a VM, not here.
 
-  # ── PostgreSQL (Langfuse backend) ─────────────────────────────────
-  langfuse-db:
-    image: postgres:16-alpine
-    container_name: conductor-langfuse-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${LANGFUSE_DB_USER:-langfuse}
-      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
-      POSTGRES_DB: langfuse
-    volumes:
-      - langfuse_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${LANGFUSE_DB_USER:-langfuse}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # ══════════════════════════════════════════════════════════════════
+  #  OpenWebUI (chat interface)
+  # ══════════════════════════════════════════════════════════════════
 
-  # ── Langfuse (observability + prompt management) ──────────────────
-  langfuse-server:
-    image: langfuse/langfuse:latest
-    container_name: conductor-langfuse
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: conductor-open-webui
     restart: unless-stopped
-    depends_on:
-      langfuse-db:
-        condition: service_healthy
+    security_opt:
+      - apparmor:unconfined
     ports:
-      - "3100:3000"
+      - "127.0.0.1:3200:8080"
+    networks:
+      - default
+      - traefik
     environment:
-      DATABASE_URL: postgresql://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/langfuse
-      NEXTAUTH_URL: http://localhost:3100
-      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-conductor-langfuse-secret-change-me}
-      SALT: ${LANGFUSE_SALT:-conductor-langfuse-salt-change-me}
-      # Telemetry opt-out for self-hosted
-      TELEMETRY_ENABLED: "false"
-      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+      # Connect to Ollama on the host (local models)
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # Connect to LiteLLM for cloud model access (85 models via conductor-router)
+      OPENAI_API_BASE_URL: http://conductor-router:8100/v1
+      OPENAI_API_KEY: ${ROUTER_API_KEY}
+      # Persistent data
+      DATA_DIR: /app/backend/data
+      # Stable secret so JWTs survive container restarts
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
+      # ── Keycloak OIDC Authentication ──────────────────
+      WEBUI_AUTH: "true"
+      ENABLE_OAUTH_SIGNUP: "true"
+      ENABLE_LOGIN_FORM: "false"
+      DEFAULT_USER_ROLE: "user"
+      OAUTH_PROVIDER_NAME: "Emerald Family"
+      OAUTH_CLIENT_ID: "openwebui"
+      OAUTH_CLIENT_SECRET: "openwebui-emerald-secret-2026"
+      OPENID_PROVIDER_URL: "https://sso.library.emeraldfam.org/realms/emerald/.well-known/openid-configuration"
+      OAUTH_SCOPES: "openid email profile"
+      ENABLE_OAUTH_ROLE_MANAGEMENT: "true"
+      OAUTH_ALLOWED_ROLES: "user,admin"
+      OAUTH_ADMIN_ROLES: "admin"
+      OAUTH_EMAIL_CLAIM: "email"
+      OAUTH_USERNAME_CLAIM: "preferred_username"
+      # Blake is admin — first matching email gets admin role
+      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "true"
+      # ── Forward user identity to Conductor Router ───
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+    volumes:
+      - /mnt/storage/conductor/open-webui:/app/backend/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/public/health"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
       start_period: 30s
 
-volumes:
-  couchdb_data:
-  langfuse_db_data:
+  # ══════════════════════════════════════════════════════════════════
+  #  Langfuse v3 Stack
+  # ══════════════════════════════════════════════════════════════════
+
+  # ── PostgreSQL (Langfuse transactional data) ─────────────────────
+  langfuse-db:
+    image: postgres:17
+    container_name: conductor-langfuse-db
+    restart: unless-stopped
+    # TCP only — fixes Unix socket permission issue on Proxmox.
+    command: >
+      postgres
+      -c listen_addresses=*
+      -c unix_socket_directories=
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      POSTGRES_USER: ${LANGFUSE_DB_USER:-langfuse}
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
+      POSTGRES_DB: langfuse
+      PGHOST: localhost
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - /mnt/storage/conductor/langfuse-db:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U ${LANGFUSE_DB_USER:-langfuse}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── ClickHouse (trace/observation/score analytics) ───────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    container_name: conductor-clickhouse
+    restart: unless-stopped
+    user: "101:101"
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+    volumes:
+      - /mnt/storage/conductor/clickhouse/data:/var/lib/clickhouse
+      - /mnt/storage/conductor/clickhouse/logs:/var/log/clickhouse-server
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  # ── Redis (event queue + caching) ────────────────────────────────
+  redis:
+    image: redis:7
+    container_name: conductor-redis
+    restart: unless-stopped
+    command: >
+      --requirepass ${REDIS_AUTH:-conductorredis}
+      --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH:-conductorredis}", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  # ── MinIO (S3-compatible blob storage) ───────────────────────────
+  minio:
+    image: minio/minio
+    container_name: conductor-minio
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-conductorminio}
+    volumes:
+      - /mnt/storage/conductor/minio:/data
+    ports:
+      - "9080:9000"
+      - "127.0.0.1:9081:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  # ── Langfuse Worker (async event processing) ─────────────────────
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: conductor-langfuse-worker
+    restart: unless-stopped
+    security_opt:
+      - apparmor:unconfined
+    depends_on: &langfuse-deps
+      langfuse-db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3030:3030"
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://${LANGFUSE_DB_USER:-langfuse}:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/langfuse
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3100}
+      SALT: ${LANGFUSE_SALT:-f4a68034860afc2e3d801f39a7dd4e88}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+      # ClickHouse
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      # S3 / MinIO — event storage
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-conductorminio}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      # S3 / MinIO — media storage
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-conductorminio}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9080
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REDIS_AUTH:-conductorredis}
+      REDIS_TLS_ENABLED: "false"
+
+  # ── Langfuse Web (UI + API) ─────────────────────────────────────
+  langfuse-web:
+    image: langfuse/langfuse:3
+    container_name: conductor-langfuse
+    restart: unless-stopped
+    security_opt:
+      - apparmor:unconfined
+    depends_on: *langfuse-deps
+    ports:
+      - "127.0.0.1:3100:3000"
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      # Headless initialization — org, project, API keys, admin user
+      LANGFUSE_INIT_ORG_ID: conductor-org
+      LANGFUSE_INIT_ORG_NAME: Conductor
+      LANGFUSE_INIT_PROJECT_ID: conductor-project
+      LANGFUSE_INIT_PROJECT_NAME: maistro
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-conductor
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-conductor
+      LANGFUSE_INIT_USER_EMAIL: conductor@emeraldfam.org
+      LANGFUSE_INIT_USER_NAME: conductor
+      LANGFUSE_INIT_USER_PASSWORD: conductor123!
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://$(hostname -i):3000/api/public/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+networks:
+  traefik:
+    external: true

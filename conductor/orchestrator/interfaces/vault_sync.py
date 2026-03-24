@@ -22,6 +22,10 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .couchdb_client import CouchDBClient
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +97,7 @@ class GitSync(VaultSyncAdapter):
             "status": "ok" if result.returncode == 0 else "error",
             "remote": self._remote,
             "branch": self._branch,
-            "dirty_files": len(result.stdout.strip().splitlines()) if result.stdout else 0,
+            "dirty_files": len(result.stdout.strip().splitlines()) if result.stdout else 0,  # type: ignore[attr-defined]
         }
 
     async def _run(self, cmd: str) -> asyncio.subprocess.Process:
@@ -103,9 +107,10 @@ class GitSync(VaultSyncAdapter):
             stderr=asyncio.subprocess.PIPE,
             cwd=self._vault,
         )
-        stdout, stderr = await proc.communicate()
-        proc.stdout = stdout.decode(errors="replace") if stdout else ""
-        proc.stderr = stderr.decode(errors="replace") if stderr else ""
+        raw_stdout, raw_stderr = await proc.communicate()
+        # Store decoded strings for convenience — callers access proc.stdout as str
+        proc.stdout = raw_stdout.decode(errors="replace") if raw_stdout else ""  # type: ignore[assignment]
+        proc.stderr = raw_stderr.decode(errors="replace") if raw_stderr else ""  # type: ignore[assignment]
         return proc
 
 

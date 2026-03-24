@@ -38,6 +38,8 @@ from enum import Enum
 
 import httpx
 
+from .. import _gateway_auth
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,45 +71,45 @@ class RoutingResult:
 # Trigger phrases → intent mappings
 _TRIGGER_PATTERNS: list[tuple[re.Pattern, Intent, str]] = [
     # Home automation (Abra)
-    (re.compile(r"\btell\s+abra\s+to\b", re.I), Intent.HOME_AUTOMATION, "abra"),
-    (re.compile(r"\babra[\s,]+", re.I), Intent.HOME_AUTOMATION, "abra"),
-    (re.compile(r"\bturn\s+(on|off)\s+(the\s+)?", re.I), Intent.HOME_AUTOMATION, "abra"),
-    (re.compile(r"\b(kill|cut)\s+(the\s+)?light", re.I), Intent.HOME_AUTOMATION, "abra"),
-    (re.compile(r"\bset\s+(the\s+)?(thermostat|thermo|temperature|lights?|lites?|brightness)\b", re.I), Intent.HOME_AUTOMATION, "abra"),
-    (re.compile(r"\b(light|lite)[s]?\s+(on|off|dim|bright)", re.I), Intent.HOME_AUTOMATION, "abra"),
-    (re.compile(r"\block\s+(the\s+)?door", re.I), Intent.HOME_AUTOMATION, "abra"),
-    (re.compile(r"\barm\s+(the\s+)?(alarm|security)", re.I), Intent.HOME_AUTOMATION, "abra"),
+    (re.compile(r"\btell\s+abra\s+to\b", re.IGNORECASE), Intent.HOME_AUTOMATION, "abra"),
+    (re.compile(r"\babra[\s,]+", re.IGNORECASE), Intent.HOME_AUTOMATION, "abra"),
+    (re.compile(r"\bturn\s+(on|off)\s+(the\s+)?", re.IGNORECASE), Intent.HOME_AUTOMATION, "abra"),
+    (re.compile(r"\b(kill|cut)\s+(the\s+)?light", re.IGNORECASE), Intent.HOME_AUTOMATION, "abra"),
+    (re.compile(r"\bset\s+(the\s+)?(thermostat|thermo|temperature|lights?|lites?|brightness)\b", re.IGNORECASE), Intent.HOME_AUTOMATION, "abra"),
+    (re.compile(r"\b(light|lite)[s]?\s+(on|off|dim|bright)", re.IGNORECASE), Intent.HOME_AUTOMATION, "abra"),
+    (re.compile(r"\block\s+(the\s+)?door", re.IGNORECASE), Intent.HOME_AUTOMATION, "abra"),
+    (re.compile(r"\barm\s+(the\s+)?(alarm|security)", re.IGNORECASE), Intent.HOME_AUTOMATION, "abra"),
 
     # Coding
-    (re.compile(r"\b(let'?s|please)\s+(make|build|create|write|implement)\b", re.I), Intent.CODE, "coder"),
-    (re.compile(r"\bfix\s+(the\s+|this\s+)?(bug|error|issue|crash|problem)\b", re.I), Intent.CODE, "coder"),
-    (re.compile(r"\brefactor\b", re.I), Intent.CODE, "coder"),
-    (re.compile(r"\badd\s+(a\s+)?(test|feature|endpoint|route|function|class|method)\b", re.I), Intent.CODE, "coder"),
-    (re.compile(r"\bimplement\b", re.I), Intent.CODE, "coder"),
-    (re.compile(r"\b(write|create)\s+(a\s+)?(script|function|class|module|decorator|test)\b", re.I), Intent.CODE, "coder"),
+    (re.compile(r"\b(let'?s|please)\s+(make|build|create|write|implement)\b", re.IGNORECASE), Intent.CODE, "coder"),
+    (re.compile(r"\bfix\s+(the\s+|this\s+)?(bug|error|issue|crash|problem)\b", re.IGNORECASE), Intent.CODE, "coder"),
+    (re.compile(r"\brefactor\b", re.IGNORECASE), Intent.CODE, "coder"),
+    (re.compile(r"\badd\s+(a\s+)?(test|feature|endpoint|route|function|class|method)\b", re.IGNORECASE), Intent.CODE, "coder"),
+    (re.compile(r"\bimplement\b", re.IGNORECASE), Intent.CODE, "coder"),
+    (re.compile(r"\b(write|create)\s+(a\s+)?(script|function|class|module|decorator|test)\b", re.IGNORECASE), Intent.CODE, "coder"),
 
     # Analysis
-    (re.compile(r"\b(review|audit|assess|analyze|evaluate)\s+(the\s+|this\s+)?", re.I), Intent.ANALYSIS, "coder"),
-    (re.compile(r"\bsecurity\s+(review|audit|check)\b", re.I), Intent.ANALYSIS, "coder"),
-    (re.compile(r"\bcode\s+review\b", re.I), Intent.ANALYSIS, "coder"),
+    (re.compile(r"\b(review|audit|assess|analyze|evaluate)\s+(the\s+|this\s+)?", re.IGNORECASE), Intent.ANALYSIS, "coder"),
+    (re.compile(r"\bsecurity\s+(review|audit|check)\b", re.IGNORECASE), Intent.ANALYSIS, "coder"),
+    (re.compile(r"\bcode\s+review\b", re.IGNORECASE), Intent.ANALYSIS, "coder"),
 
     # Artifacts
-    (re.compile(r"\b(create|make|generate|write)\s+(a\s+)?(document|doc|presentation|report|readme|proposal)\b", re.I), Intent.ARTIFACT, "artifact"),
-    (re.compile(r"\bdraft\s+(a\s+)?(email|memo|spec|rfc|design\s+doc)\b", re.I), Intent.ARTIFACT, "artifact"),
+    (re.compile(r"\b(create|make|generate|write)\s+(a\s+)?(document|doc|presentation|report|readme|proposal)\b", re.IGNORECASE), Intent.ARTIFACT, "artifact"),
+    (re.compile(r"\bdraft\s+(a\s+)?(email|memo|spec|rfc|design\s+doc)\b", re.IGNORECASE), Intent.ARTIFACT, "artifact"),
 ]
 
 # Safety patterns — always checked first
 _SAFETY_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.I), "Prompt injection attempt"),
-    (re.compile(r"you\s+are\s+now\s+(a|an|the)\b", re.I), "Role override attempt"),
-    (re.compile(r"pretend\s+(you('re|\s+are)\s+)?(a|an|not)\b", re.I), "Role override attempt"),
-    (re.compile(r"system\s*:\s*", re.I), "System prompt injection"),
-    (re.compile(r"\bsudo\s+", re.I), "Privilege escalation attempt"),
-    (re.compile(r"rm\s+-rf\s+/", re.I), "Destructive command"),
-    (re.compile(r"\b(hack|exploit|ddos|phish|malware|ransomware)\b.*\b(how|tutorial|guide|script)\b", re.I), "Malicious intent"),
-    (re.compile(r"\b(steal|exfiltrate|dump)\s+(credentials?|passwords?|data|tokens?|keys?)\b", re.I), "Data theft intent"),
-    (re.compile(r"<\|.*?\|>", re.I), "Token manipulation attempt"),
-    (re.compile(r"\[\[.*?SYSTEM.*?\]\]", re.I), "System prompt injection"),
+    (re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE), "Prompt injection attempt"),
+    (re.compile(r"you\s+are\s+now\s+(a|an|the)\b", re.IGNORECASE), "Role override attempt"),
+    (re.compile(r"pretend\s+(you('re|\s+are)\s+)?(a|an|not)\b", re.IGNORECASE), "Role override attempt"),
+    (re.compile(r"system\s*:\s*", re.IGNORECASE), "System prompt injection"),
+    (re.compile(r"\bsudo\s+", re.IGNORECASE), "Privilege escalation attempt"),
+    (re.compile(r"rm\s+-rf\s+/", re.IGNORECASE), "Destructive command"),
+    (re.compile(r"\b(hack|exploit|ddos|phish|malware|ransomware)\b.*\b(how|tutorial|guide|script)\b", re.IGNORECASE), "Malicious intent"),
+    (re.compile(r"\b(steal|exfiltrate|dump)\s+(credentials?|passwords?|data|tokens?|keys?)\b", re.IGNORECASE), "Data theft intent"),
+    (re.compile(r"<\|.*?\|>", re.IGNORECASE), "Token manipulation attempt"),
+    (re.compile(r"\[\[.*?SYSTEM.*?\]\]", re.IGNORECASE), "System prompt injection"),
 ]
 
 # Intent keywords for LLM fallback classification
@@ -137,20 +139,57 @@ class IntentRouter:
         self,
         gateway_url: str = "http://localhost:9090",
         confidence_threshold: float = 0.7,
+        routing_model: str | None = None,
+        routing_provider: str | None = None,
+        routing_api_key: str | None = None,
+        routing_api_base: str | None = None,
     ) -> None:
         self._gateway_url = gateway_url
         self._confidence_threshold = confidence_threshold
+        self._routing_model = routing_model
+        self._routing_provider = routing_provider
+        self._routing_api_key = routing_api_key
+        self._routing_api_base = routing_api_base
         self._client: httpx.AsyncClient | None = None
+        self._routing_client: httpx.AsyncClient | None = None
 
     async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(base_url=self._gateway_url, timeout=30)
+            self._client = await _gateway_auth.gateway_client()  # Shared client
         return self._client
+
+    async def _ensure_routing_client(self) -> httpx.AsyncClient | None:
+        """Create a direct-to-cloud client for classification, if configured."""
+        if not self._routing_provider or not self._routing_api_key:
+            return None
+        if self._routing_client is None:
+            if self._routing_provider == "anthropic":
+                self._routing_client = httpx.AsyncClient(
+                    timeout=30,
+                    headers={
+                        "x-api-key": self._routing_api_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                )
+            else:
+                # OpenAI / OpenRouter / any OpenAI-compat
+                self._routing_client = httpx.AsyncClient(
+                    timeout=30,
+                    headers={
+                        "Authorization": f"Bearer {self._routing_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+        return self._routing_client
 
     async def close(self) -> None:
         if self._client:
             await self._client.aclose()
             self._client = None
+        if self._routing_client:
+            await self._routing_client.aclose()
+            self._routing_client = None
 
     async def route(self, task_text: str) -> RoutingResult:
         """Classify intent and return routing decision.
@@ -224,14 +263,18 @@ class IntentRouter:
         return None
 
     async def _classify_with_llm(self, text: str) -> RoutingResult:
-        """Use the LLM to classify intent when patterns don't match."""
-        client = await self._ensure_client()
+        """Use the LLM to classify intent when patterns don't match.
 
+        If a routing_provider is configured, calls the cloud API directly
+        (bypassing the gateway) for better classification accuracy.
+        Otherwise falls back to the gateway's default model.
+        """
         intent_list = "\n".join(
             f"- {intent.value}: {desc}"
             for intent, desc in _INTENT_DESCRIPTIONS.items()
         )
 
+        system_msg = "You are an intent classifier. Respond only with JSON."
         prompt = f"""\
 Classify the user's intent. Respond with ONLY a JSON object:
 {{"intent": "<one of: code, home_automation, artifact, analysis, conversation>", "confidence": <0.0-1.0>, "reasoning": "<one sentence>"}}
@@ -242,19 +285,7 @@ Available intents:
 User message: {text}"""
 
         try:
-            resp = await client.post(
-                "/v1/chat/completions",
-                json={
-                    "messages": [
-                        {"role": "system", "content": "You are an intent classifier. Respond only with JSON."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": 128,
-                    "temperature": 0.1,
-                },
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
+            content = await self._call_routing_llm(system_msg, prompt)
 
             # Parse response
             import json
@@ -312,10 +343,66 @@ User message: {text}"""
             f"I want to make sure I understand your request correctly.\n\n"
             f"I interpreted this as: **{guess_desc}**\n"
             f"(confidence: {best_guess.confidence:.0%})\n\n"
-            f"Your message: \"{text[:200]}\"\n\n"
+            f'Your message: "{text[:200]}"\n\n'
             f"Is this correct? If not, could you rephrase what you'd like me to do?\n"
             f"For example:\n"
-            f"  - For coding: \"fix the bug in...\", \"create a function that...\"\n"
-            f"  - For home automation: \"tell Abra to turn off the lights\"\n"
-            f"  - For documents: \"create a report about...\"\n"
+            f'  - For coding: "fix the bug in...", "create a function that..."\n'
+            f'  - For home automation: "tell Abra to turn off the lights"\n'
+            f'  - For documents: "create a report about..."\n'
         )
+
+    async def _call_routing_llm(self, system_msg: str, user_msg: str) -> str:
+        """Call the routing LLM — cloud API if configured, gateway otherwise."""
+        routing_client = await self._ensure_routing_client()
+
+        if routing_client and self._routing_provider == "anthropic":
+            # Anthropic Messages API (different shape)
+            base = (self._routing_api_base or "https://api.anthropic.com").rstrip("/")
+            resp = await routing_client.post(
+                f"{base}/v1/messages",
+                json={
+                    "model": self._routing_model or "claude-haiku-4-5-20251001",
+                    "system": system_msg,
+                    "messages": [{"role": "user", "content": user_msg}],
+                    "max_tokens": 128,
+                    "temperature": 0.1,
+                },
+            )
+            resp.raise_for_status()
+            blocks = resp.json().get("content", [])
+            return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+
+        elif routing_client:
+            # OpenAI-compatible (OpenAI, OpenRouter, etc.)
+            base = (self._routing_api_base or "https://api.openai.com/v1").rstrip("/")
+            resp = await routing_client.post(
+                f"{base}/chat/completions",
+                json={
+                    "model": self._routing_model or "gpt-4o-mini",
+                    "messages": [
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "max_tokens": 128,
+                    "temperature": 0.1,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+
+        else:
+            # Fallback: route through the gateway
+            client = await self._ensure_client()
+            payload: dict = {
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                "max_tokens": 128,
+                "temperature": 0.1,
+            }
+            if self._routing_model:
+                payload["model"] = self._routing_model
+            resp = await client.post("/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]

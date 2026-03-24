@@ -20,12 +20,12 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
 
-from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifiedEvent
+from watchdog.events import FileCreatedEvent, FileModifiedEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from .vault_sync import VaultSyncAdapter, LocalSync
+from .vault_sync import LocalSync, VaultSyncAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class ObsidianWatcher:
         self._on_new_task = on_new_task
         self._on_constraints_changed = on_constraints_changed
         self._sync = sync_adapter or LocalSync()
-        self._observer: Observer | None = None
+        self._observer: Observer | None = None  # type: ignore[valid-type]
         self._loop: asyncio.AbstractEventLoop | None = None
 
         # Ensure directories exist
@@ -80,8 +80,8 @@ class ObsidianWatcher:
 
     def stop(self) -> None:
         if self._observer:
-            self._observer.stop()
-            self._observer.join()
+            self._observer.stop()  # type: ignore[attr-defined]
+            self._observer.join()  # type: ignore[attr-defined]
             logger.info("Obsidian watcher stopped")
 
     async def write_completed(self, task_filename: str, result: str) -> Path:
@@ -133,14 +133,14 @@ class ObsidianWatcher:
         """Called by watchdog handler when a new task file appears."""
         if self._loop and self._on_new_task:
             asyncio.run_coroutine_threadsafe(
-                self._on_new_task(filename, content), self._loop
+                self._on_new_task(filename, content), self._loop  # type: ignore[arg-type]
             )
 
     def _dispatch_constraints_change(self) -> None:
         """Called when the constraints file changes."""
         if self._loop and self._on_constraints_changed:
             asyncio.run_coroutine_threadsafe(
-                self._on_constraints_changed(), self._loop
+                self._on_constraints_changed(), self._loop  # type: ignore[arg-type]
             )
 
 
@@ -154,10 +154,10 @@ class _InboxHandler(FileSystemEventHandler):
         self._callback = callback
         self._debounce: dict[str, float] = {}
 
-    def on_created(self, event: FileCreatedEvent) -> None:
+    def on_created(self, event: FileCreatedEvent) -> None:  # type: ignore[override]
         if event.is_directory:
             return
-        path = Path(event.src_path)
+        path = Path(event.src_path)  # type: ignore[arg-type]
         if path.suffix != ".md":
             return
 
@@ -184,7 +184,7 @@ class _ConstraintsHandler(FileSystemEventHandler):
         self._path = constraints_path
         self._callback = callback
 
-    def on_modified(self, event: FileModifiedEvent) -> None:
-        if Path(event.src_path).resolve() == self._path.resolve():
+    def on_modified(self, event: FileModifiedEvent) -> None:  # type: ignore[override]
+        if Path(event.src_path).resolve() == self._path.resolve():  # type: ignore[arg-type]
             logger.info("Constraints file modified — triggering cache invalidation")
             self._callback()

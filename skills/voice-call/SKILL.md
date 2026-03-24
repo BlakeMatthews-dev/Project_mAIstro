@@ -3,7 +3,7 @@ name: voice-call
 description: Start voice calls via the OpenClaw voice-call plugin.
 metadata:
   {
-    "openclaw":
+    "maistro":
       {
         "emoji": "📞",
         "skillKey": "voice-call",

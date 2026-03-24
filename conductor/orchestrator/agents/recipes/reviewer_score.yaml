@@ -1,0 +1,16 @@
+name: reviewer.score
+role: reviewer
+description: "Score code outputs across quality dimensions"
+prompt_name: reviewer.score
+prompt_variants:
+  - production
+  - v2-strict
+result_schema: schemas.ReviewOutput
+tools:
+  - file_ops.read
+  - file_ops.list
+min_tier: 2
+temperature: 0.2
+max_tokens: 2048
+min_samples_before_selection: 30
+exploration_rate: 0.05

@@ -1,0 +1,18 @@
+name: coder.python
+role: coder
+description: "Generate Python code from task descriptions"
+prompt_name: coder.generate
+prompt_variants:
+  - production
+  - v2-concise
+  - v3-chain-of-thought
+result_schema: schemas.CodeOutput
+tools:
+  - file_ops.read
+  - file_ops.write
+  - shell.run
+min_tier: 2
+temperature: 0.3
+max_tokens: 4096
+min_samples_before_selection: 20
+exploration_rate: 0.1

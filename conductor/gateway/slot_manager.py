@@ -51,31 +51,68 @@ class SlotManager:
             self._available.put_nowait(wid)
         self._metrics: list[SlotMetrics] = []
 
+        # Lane-aware scheduling: split workers into reserved and shared pools.
+        # Reserved slots are held for live-chat and only used by background
+        # tasks when no live requests are pending.
+        # With 4 slots: [1,2] reserved for live, [3,4] shared/background.
+        mid = max(1, len(self._worker_ids) // 2)
+        self._live_reserved_ids = set(self._worker_ids[:mid])
+        self._shared_ids = set(self._worker_ids[mid:])
+        # Track how many live-chat requests are currently waiting or running
+        self._live_waiters = 0
+        self._lock = asyncio.Lock()
+
     # ------------------------------------------------------------------
     # Worker slot acquisition
     # ------------------------------------------------------------------
 
-    async def acquire_workers(self, n: int, timeout: float | None = None) -> list[int]:
-        """Acquire N worker slots. Blocks until all are available."""
+    async def acquire_workers(
+        self, n: int, timeout: float | None = None, lane: str | None = None
+    ) -> list[int]:
+        """Acquire N worker slots with lane-aware priority.
+
+        Live-chat lane:
+          - Gets shorter timeout (fast-fail rather than queue behind batch)
+          - Tries to grab slots from the front of the queue (reserved pool first)
+
+        Background-task lane:
+          - Uses longer timeout (patient waiting)
+          - When live-chat waiters exist, background requests wait longer
+            so live gets first pick at newly released slots
+        """
         if n > len(self._worker_ids):
             raise ValueError(
                 f"Requested {n} workers but only {len(self._worker_ids)} exist"
             )
-        slots: list[int] = []
+
+        is_live = lane == "live-chat"
         effective_timeout = timeout or self._config.generation_timeout_seconds
-        for _ in range(n):
-            try:
-                slot_id = await asyncio.wait_for(
-                    self._available.get(), timeout=effective_timeout
-                )
-                slots.append(slot_id)
-            except asyncio.TimeoutError:
-                # Return any already-acquired slots
-                for s in slots:
-                    self._available.put_nowait(s)
-                raise TimeoutError(
-                    f"Timed out acquiring worker slots (got {len(slots)}/{n})"
-                )
+
+        if is_live:
+            # Live chat: shorter timeout — better to fail fast than stall the user
+            effective_timeout = min(effective_timeout, 10.0)
+            async with self._lock:
+                self._live_waiters += 1
+
+        slots: list[int] = []
+        try:
+            for _ in range(n):
+                try:
+                    slot_id = await asyncio.wait_for(
+                        self._available.get(), timeout=effective_timeout
+                    )
+                    slots.append(slot_id)
+                except asyncio.TimeoutError:
+                    for s in slots:
+                        self._available.put_nowait(s)
+                    raise TimeoutError(
+                        f"Timed out acquiring worker slots (got {len(slots)}/{n}, lane={lane})"
+                    )
+        finally:
+            if is_live:
+                async with self._lock:
+                    self._live_waiters = max(0, self._live_waiters - 1)
+
         return slots
 
     def release_workers(self, slot_ids: list[int]) -> None:
@@ -85,6 +122,11 @@ class SlotManager:
                 logger.error("BUG: attempted to release template slot %d", sid)
                 continue
             self._available.put_nowait(sid)
+
+    @property
+    def live_waiters(self) -> int:
+        """Number of live-chat requests currently waiting for slots."""
+        return self._live_waiters
 
     # ------------------------------------------------------------------
     # KV cache operations

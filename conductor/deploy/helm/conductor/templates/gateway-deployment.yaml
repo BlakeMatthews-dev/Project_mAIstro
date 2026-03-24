@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-gateway
+  labels:
+    app.kubernetes.io/name: conductor-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: conductor-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: conductor-gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: gateway
+    spec:
+      serviceAccountName: {{ .Release.Name }}-conductor
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          {{- if .Values.image.digest }}
+          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+          {{- else }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command: ["uvicorn", "gateway.server:app", "--host", "0.0.0.0", "--port", "9090"]
+          ports:
+            - name: http
+              containerPort: 9090
+          env:
+            - name: CONDUCTOR_TENANT_ID
+              value: {{ .Values.global.tenantId | quote }}
+            - name: CONDUCTOR_SECRETS_BACKEND
+              value: {{ .Values.secrets.backend | quote }}
+            - name: CONDUCTOR_AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
+            - name: CONDUCTOR_INFERENCE_PROVIDER
+              value: "openai"
+            - name: CONDUCTOR_INFERENCE_API_BASE
+              value: "http://{{ .Release.Name }}-router:8100/v1"
+            - name: CONDUCTOR_INFERENCE_MODEL
+              value: "auto"
+            - name: CONDUCTOR_INFERENCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.apiKeySecret }}
+                  key: {{ .Values.auth.apiKeySecretKey }}
+          {{- if eq .Values.secrets.backend "kubernetes" }}
+          volumeMounts:
+            - name: secrets
+              mountPath: {{ .Values.secrets.kubernetes.mountPath }}
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      {{- if eq .Values.secrets.backend "kubernetes" }}
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ .Release.Name }}-secrets
+      {{- end }}

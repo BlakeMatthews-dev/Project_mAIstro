@@ -4,7 +4,7 @@ description: "Log all command events to a centralized audit file"
 homepage: https://docs.openclaw.ai/automation/hooks#command-logger
 metadata:
   {
-    "openclaw":
+    "maistro":
       {
         "emoji": "📝",
         "events": ["command"],

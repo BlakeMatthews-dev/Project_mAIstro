@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +224,109 @@ class PromptManager:
             pushed.append(name)
 
         return pushed
+
+    def list_variants(self, name: str) -> list[str]:
+        """List all variant labels for a prompt in Langfuse.
+
+        Returns a list of label strings (e.g. ["production", "v2-concise"]).
+        Falls back to ["production"] if Langfuse is unavailable.
+        """
+        lf = self._get_langfuse()
+        if lf is None:
+            return ["production"]
+
+        try:
+            # Langfuse SDK: list prompt versions
+            prompts = lf.client.prompts.list(name=name)
+            labels = set()
+            for p in prompts.data:
+                if hasattr(p, "labels") and p.labels:
+                    labels.update(p.labels)
+            return sorted(labels) if labels else ["production"]
+        except Exception as exc:
+            logger.debug("Failed to list variants for %r: %s", name, exc)
+            return ["production"]
+
+    def create_variant(self, name: str, label: str, content: str) -> bool:
+        """Create a new prompt version with the given label in Langfuse.
+
+        This adds a new version of the prompt (identified by name) with
+        the specified label. The content is the full prompt text.
+        Returns True on success, False on failure.
+        """
+        lf = self._get_langfuse()
+        if lf is None:
+            logger.warning("Cannot create variant: Langfuse not available")
+            return False
+
+        try:
+            lf.create_prompt(
+                name=name,
+                prompt=content,
+                labels=[label],
+                type="text",
+            )
+            # Also save locally
+            self._write_local(f"{name}:{label}", content)
+            logger.info("Created variant '%s' for prompt '%s'", label, name)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to create variant %r for %r: %s", label, name, exc)
+            return False
+
+    def promote_variant(self, name: str, from_label: str) -> bool:
+        """Promote a variant to 'production' by copying its content.
+
+        Fetches the prompt with from_label and creates a new version
+        with the 'production' label. The old production prompt remains
+        in Langfuse version history for rollback.
+        Returns True on success, False on failure.
+        """
+        lf = self._get_langfuse()
+        if lf is None:
+            logger.warning("Cannot promote: Langfuse not available")
+            return False
+
+        try:
+            # Fetch the source variant
+            source = lf.get_prompt(name, label=from_label)
+            content = source.prompt
+
+            # Create new version with production label
+            if isinstance(content, list):
+                lf.create_prompt(
+                    name=name,
+                    prompt=content,
+                    config=source.config,
+                    type="chat",
+                    labels=["production"],
+                )
+            else:
+                lf.create_prompt(
+                    name=name,
+                    prompt=content,
+                    config=source.config,
+                    type="text",
+                    labels=["production"],
+                )
+
+            # Update local cache
+            if isinstance(content, list):
+                self._write_local(name, json.dumps(content, indent=2), source.config)
+            else:
+                self._write_local(name, content, source.config)
+
+            logger.info(
+                "Promoted variant '%s' → 'production' for prompt '%s'",
+                from_label, name,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Failed to promote %r → 'production' for %r: %s",
+                from_label, name, exc,
+            )
+            return False
 
     def list_local_prompts(self) -> list[str]:
         """List all locally available prompt template names."""

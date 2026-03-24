@@ -19,17 +19,44 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-# Commands that should never be run automatically
+# Allowed command prefixes — allowlist, not blocklist.
+# Only commands starting with these prefixes can execute.
+# The model picks from this list; anything else is rejected.
+ALLOWED_PREFIXES = [
+    # Build & test
+    "python", "pip", "pytest", "mypy", "ruff", "bandit",
+    "npm", "node", "npx", "yarn",
+    "make", "cargo", "go ",
+    # Version control
+    "git ",
+    # File inspection (read-only)
+    "cat ", "head ", "tail ", "wc ", "diff ", "find ", "ls ",
+    "grep ", "rg ", "ag ",
+    # System inspection (read-only)
+    "df ", "du ", "free ", "ps ", "top -bn1", "uptime",
+    "docker ps", "docker logs", "docker inspect",
+    "systemctl status", "journalctl",
+    "nvidia-smi", "lsblk", "uname",
+    "curl -s", "wget -q",  # read-only HTTP
+    # NOTE: bash/sh deliberately excluded — use specific commands above
+]
+
+# Patterns that indicate shell injection or dangerous operations
 BLOCKED_PATTERNS = [
-    "rm -rf /",
-    "rm -rf ~",
-    "mkfs",
-    "dd if=",
-    "> /dev/sd",
-    "chmod 777",
-    "curl | sh",
-    "wget | sh",
-    "sudo",
+    "rm -rf /", "rm -rf ~", "rm -rf .",
+    "mkfs", "dd if=", "> /dev/sd",
+    "chmod 777", "chmod -R 777",
+    "| sh", "| bash", "| python",
+    "sudo ", "; sudo",
+    "eval ", "exec ",
+    "--no-verify", "--force",
+    "`",        # backtick command substitution
+    "$(",       # subshell
+    "&&",       # command chaining
+    "||",       # command chaining
+    ";",        # command separator
+    ">/",       # redirect to absolute path
+    ">>",       # append redirect
 ]
 
 MAX_OUTPUT_BYTES = 64 * 1024  # 64KB
@@ -56,10 +83,23 @@ class Shell:
         timeout: int | None = None,
     ) -> ShellResult:
         """Execute a shell command in the project directory."""
-        # Safety check
-        cmd_lower = command.lower()
+        # Safety: allowlist check first
+        cmd_lower = command.lower().strip()
+        allowed = any(cmd_lower.startswith(prefix) for prefix in ALLOWED_PREFIXES)
+        if not allowed:
+            logger.warning("Shell BLOCKED (not in allowlist): %s", command[:80])
+            return ShellResult(
+                success=False,
+                command=command,
+                stdout="",
+                stderr=f"Blocked: command not in allowlist. Allowed prefixes: {', '.join(ALLOWED_PREFIXES[:10])}...",
+                return_code=-1,
+            )
+
+        # Safety: blocklist check second (catches dangerous patterns within allowed commands)
         for pattern in BLOCKED_PATTERNS:
             if pattern in cmd_lower:
+                logger.warning("Shell BLOCKED (dangerous pattern): %s", command[:80])
                 return ShellResult(
                     success=False,
                     command=command,
@@ -72,8 +112,12 @@ class Shell:
         logger.info("Shell: %s (timeout=%ds)", command, effective_timeout)
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
+            # Use create_subprocess_exec (argv) not create_subprocess_shell
+            # to prevent shell injection. Split command into argv safely.
+            import shlex
+            argv = shlex.split(command)
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self._cwd,

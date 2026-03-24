@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os as _os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from .config import GatewayConfig
@@ -47,6 +48,11 @@ class ChatCompletionRequest(BaseModel):
     stop: list[str] | None = None
     # Gateway extension: pin to a specific slot (local provider only)
     id_slot: int | None = None
+    # Langfuse trace propagation: nest gateway spans under conductor's trace
+    langfuse_trace_id: str | None = None
+    langfuse_parent_span_id: str | None = None
+    # Execution lane: "live-chat" (latency-sensitive) or "background-task" (throughput)
+    lane: str | None = None
 
 
 class UltraThinkRequest(BaseModel):
@@ -56,6 +62,11 @@ class UltraThinkRequest(BaseModel):
     tier: int = 2
     max_tokens: int | None = None
     project_id: str | None = None
+    # Langfuse trace propagation: nest ultra-think spans under conductor's trace
+    langfuse_trace_id: str | None = None
+    langfuse_parent_span_id: str | None = None
+    # Execution lane: "live-chat" (latency-sensitive) or "background-task" (throughput)
+    lane: str | None = None
 
 
 class ProjectLoadRequest(BaseModel):
@@ -82,6 +93,32 @@ slot_manager: SlotManager | None = None
 prefix_cache = None
 ultra_think: UltraThink
 metrics_path: Path
+
+# Gateway auth — shared secret between orchestrator and gateway
+_GATEWAY_KEY = _os.environ.get("CONDUCTOR_GATEWAY_KEY", "")
+
+
+def _check_gateway_auth(authorization: str | None = Header(None)) -> None:
+    """Verify gateway requests come from the orchestrator.
+
+    In homelab mode (no key set), all requests are allowed (bound to 127.0.0.1).
+    In K8s mode, a shared secret is required.
+    Uses FastAPI's Header dependency — works regardless of request body type.
+    """
+    if not _GATEWAY_KEY:
+        return  # No key configured — homelab mode, localhost only
+    token = (authorization or "").replace("Bearer ", "")
+    if token != _GATEWAY_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+def _sanitize_project_id(pid: str) -> str:
+    """Sanitize project_id to prevent path traversal."""
+    import re as _re
+    cleaned = _re.sub(r"[^a-zA-Z0-9_-]", "", pid)
+    if not cleaned or cleaned != pid:
+        raise HTTPException(status_code=400, detail=f"Invalid project_id: {pid!r}")
+    return cleaned
+
 
 
 @asynccontextmanager
@@ -126,18 +163,21 @@ app = FastAPI(title="Conductor Inference Gateway", lifespan=lifespan)
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: ChatCompletionRequest):
+async def chat_completions(req: ChatCompletionRequest, _auth: None = Depends(_check_gateway_auth)):
     """OpenAI-compatible endpoint with transparent slot management."""
     start = time.monotonic()
 
     extra: dict = {}
     acquired = False
     slot_id = req.id_slot
+    # Protect template slot — clients cannot pin to it
+    if slot_id is not None and config.is_local and slot_id == config.template_slot_id:
+        raise HTTPException(status_code=400, detail="Cannot use template slot directly")
 
     # Slot management only for local provider
     if config.is_local and slot_manager is not None:
         if slot_id is None:
-            workers = await slot_manager.acquire_workers(1)
+            workers = await slot_manager.acquire_workers(1, lane=req.lane)
             slot_id = workers[0]
             acquired = True
         extra["id_slot"] = slot_id
@@ -170,11 +210,11 @@ async def chat_completions(req: ChatCompletionRequest):
         raise HTTPException(status_code=502, detail=str(exc))
     finally:
         if acquired and slot_manager is not None:
-            slot_manager.release_workers([slot_id])
+            slot_manager.release_workers([slot_id])  # type: ignore[list-item]
 
 
 @app.post("/v1/ultra-think")
-async def ultra_think_endpoint(req: UltraThinkRequest) -> dict:
+async def ultra_think_endpoint(req: UltraThinkRequest, _auth: None = Depends(_check_gateway_auth)) -> dict:
     """Parallel diverse generation for Ultra Think pipeline."""
     if req.tier >= 4:
         raise HTTPException(status_code=400, detail="Tier 4 requires decomposition")
@@ -185,7 +225,7 @@ async def ultra_think_endpoint(req: UltraThinkRequest) -> dict:
         system_prompt=req.system_prompt,
         tier=req.tier,
         max_tokens=req.max_tokens,
-        project_id=req.project_id,
+        project_id=_sanitize_project_id(req.project_id) if req.project_id else None,
     )
 
     _log_metric(
@@ -202,23 +242,20 @@ async def ultra_think_endpoint(req: UltraThinkRequest) -> dict:
 
 
 @app.post("/v1/project/load")
-async def project_load(req: ProjectLoadRequest):
+async def project_load(req: ProjectLoadRequest, _auth: None = Depends(_check_gateway_auth)):
     """Load project context into template slot KV cache (local only)."""
     if not config.is_local or prefix_cache is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Project cache operations are only available with local inference.",
-        )
-    action = await prefix_cache.ensure_loaded(
-        project_id=req.project_id,
+        return {"action": "skipped", "reason": "Not using local inference provider"}
+    action = await prefix_cache.ensure_loaded(  # type: ignore[arg-type]
+        project_id=_sanitize_project_id(req.project_id),
         layer0_text=req.layer0_text,
-        slot_manager=slot_manager,
+        slot_manager=slot_manager,  # type: ignore[arg-type]
     )
     return {"project_id": req.project_id, "action": action}
 
 
 @app.post("/v1/project/save")
-async def project_save(req: ProjectSaveRequest):
+async def project_save(req: ProjectSaveRequest, _auth: None = Depends(_check_gateway_auth)):
     """Persist current template slot KV cache to NVMe (local only)."""
     if not config.is_local or slot_manager is None:
         raise HTTPException(
@@ -230,7 +267,7 @@ async def project_save(req: ProjectSaveRequest):
 
 
 @app.post("/v1/project/restore")
-async def project_restore(req: ProjectRestoreRequest):
+async def project_restore(req: ProjectRestoreRequest, _auth: None = Depends(_check_gateway_auth)):
     """Restore template KV cache into worker slots (local only)."""
     if not config.is_local or slot_manager is None:
         raise HTTPException(
@@ -259,6 +296,9 @@ async def slots_status():
         "template_slot": config.template_slot_id,
         "worker_slots": config.worker_slot_ids,
         "available_workers": slot_manager.available_worker_count,
+        "live_reserved_slots": sorted(slot_manager._live_reserved_ids),
+        "shared_slots": sorted(slot_manager._shared_ids),
+        "live_waiters": slot_manager.live_waiters,
         "slots": raw,
     }
 
