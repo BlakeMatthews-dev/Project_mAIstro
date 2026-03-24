@@ -231,10 +231,10 @@ class TestReviewerParseReview:
         assert len(result.scores) == 3
         for i, score in enumerate(result.scores):
             assert score.candidate_idx == i
-            assert score.overall == 5.0
+            assert score.overall == 0.0
             assert score.feedback == "(unparseable review)"
         assert result.selected_idx == 0
-        assert result.selected_score == 5.0
+        assert result.selected_score == 0.0
 
     def test_out_of_range_selected_idx(self):
         raw = json.dumps({
@@ -245,9 +245,9 @@ class TestReviewerParseReview:
             "feedback_summary": "bad idx",
         })
         result = self.reviewer._parse_review("sub-4", raw, 1)
-        # selected_idx=5 is out of range of scores list (len 1)
-        assert result.selected_idx == 5
-        assert result.selected_score == 5.0  # fallback when idx out of range
+        # Out-of-range selections now fall back to the best scored candidate.
+        assert result.selected_idx == 0
+        assert result.selected_score == 8.0
 
     def test_multiple_candidates(self):
         raw = json.dumps({

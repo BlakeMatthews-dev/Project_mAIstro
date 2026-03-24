@@ -332,11 +332,11 @@ User message: {text}"""
             )
 
         except Exception as exc:
-            logger.warning("LLM classification failed, defaulting to CODE: %s", exc)
+            logger.warning("LLM classification failed, defaulting to low-confidence conversation: %s", exc)
             return RoutingResult(
-                intent=Intent.CODE,
-                confidence=0.4,
-                agent_name="coder",
+                intent=Intent.CONVERSATION,
+                confidence=0.0,
+                agent_name="conversation",
                 rewritten_task=text,
                 clarification_prompt="",
                 denial_reason="",

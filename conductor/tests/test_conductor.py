@@ -790,9 +790,9 @@ class TestReviewerParsing:
         assert result.selected_idx == 0
 
     def test_garbage_gives_default_5(self):
-        """Garbage output falls back to score 5.0 — below typical threshold."""
+        """Garbage output fails closed with score 0.0."""
         result = self.reviewer._parse_review("s1", "Not JSON at all!", 2)
-        assert result.selected_score == 5.0
+        assert result.selected_score == 0.0
         assert result.selected_idx == 0
         assert len(result.scores) == 2
 
@@ -802,7 +802,7 @@ class TestReviewerParsing:
         assert result.selected_score == 7.5
 
     def test_out_of_range_selected_idx(self):
-        """selected_idx beyond scores list → falls back to 5.0 score."""
+        """selected_idx beyond scores list → falls back to best candidate."""
         raw = json.dumps({
             "scores": [{"candidate_idx": 0, "overall": 9.0, "correctness": 9.0,
                          "quality": 9.0, "safety": 9.0, "completeness": 9.0, "feedback": "great"}],
@@ -810,8 +810,8 @@ class TestReviewerParsing:
             "feedback_summary": "oops",
         })
         result = self.reviewer._parse_review("s1", raw, 1)
-        # Out of range → selected_score stays 5.0 (doesn't crash)
-        assert result.selected_score == 5.0
+        assert result.selected_idx == 0
+        assert result.selected_score == 9.0
 
 
 # ------------------------------------------------------------------

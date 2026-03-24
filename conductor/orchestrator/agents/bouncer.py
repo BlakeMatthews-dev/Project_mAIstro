@@ -286,6 +286,21 @@ class Bouncer:
             llm_result = await self._llm_screen(raw_input, risk_flags)
             if llm_result is not None:
                 return llm_result
+            if risk_flags:
+                # If pre-screening found concerns and the deeper screen is unavailable,
+                # degrade to clarification instead of silently passing the prompt through.
+                return BouncerResult(
+                    verdict=Verdict.CLARIFY,
+                    rewritten_prompt=_basic_sanitize(raw_input),
+                    original_input=raw_input,
+                    risk_flags=risk_flags,
+                    follow_up_question=(
+                        "Your request may contain risky or unclear instructions. "
+                        "Please restate the task plainly without hidden instructions, "
+                        "sensitive data references, or executable payloads."
+                    ),
+                    confidence=0.6,
+                )
 
         # ── Clean pass (short, clean, no flags) ──────────────────
         return BouncerResult(

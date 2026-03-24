@@ -531,6 +531,14 @@ class Conductor:
             "layer1": self._layer1.build_prompt_section(),
         }
 
+        # Determine Ultra Think parallelism based on available quota
+        # If providers have >80% daily quota remaining, use parallel candidates
+        ultra_think_n = await self._check_quota_for_ultra_think()
+        if ultra_think_n > 1:
+            console.print(f"  [dim cyan]Ultra Think enabled: {ultra_think_n} parallel candidates (excess quota available)[/]")
+        else:
+            console.print("  [dim]Single-shot mode (conserving quota)[/]")
+
         # ── Stage 1: SCOUT — analyze source codebase ─────────────
         await self._progress.update(
             task_id, "scouting", filename=filename,
@@ -546,7 +554,7 @@ class Conductor:
             context=context_dict,
             recipe_name="scout.analyze",
             tier=2,
-            # Ultra Think only for local inference — cloud calls are single-shot
+            parallel_generations=ultra_think_n,
             lane=Lane.BACKGROUND,
             langfuse_trace_id=langfuse_trace_id,
         )
@@ -594,7 +602,7 @@ class Conductor:
             upstream_outputs={"scout": scout_result},
             recipe_name="architect.design",
             tier=3,
-            # Ultra Think only for local inference — cloud calls are single-shot
+            parallel_generations=min(ultra_think_n, 3),  # architect gets up to 3 candidates
             lane=Lane.BACKGROUND,
             langfuse_trace_id=langfuse_trace_id,
         )
@@ -726,6 +734,69 @@ class Conductor:
             await self._progress.update(task_id, "failed", filename=filename, error=f"{len(extract_failures)} failures")
             await self._watcher.write_failed(filename, result_text)
             console.print(f"  [bold red]Project build finished with {len(extract_failures)} failures[/]")
+
+    async def _check_quota_for_ultra_think(self) -> int:
+        """Check provider quotas — return parallel candidate count.
+
+        Uses hourly ration: remaining_tokens / hours_left_in_day.
+        As the day goes on with tokens unused, the hourly ration rises,
+        making Ultra Think increasingly aggressive toward end-of-day
+        when tokens would otherwise be wasted.
+
+        Example (daily quota 10M):
+          - 8am (16h left), 9M remaining → 562K/hr → conservative
+          - 6pm (6h left),  8M remaining → 1.3M/hr → moderate
+          - 11pm (1h left), 7M remaining → 7M/hr → go wild
+
+        Returns: 1 (single-shot), 2 (moderate), or 3 (full parallel)
+        """
+        from datetime import datetime, timezone
+
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    "http://localhost:8100/status/quota-daily",
+                    headers={"Authorization": f"Bearer {self._config.gateway_api_key}"},
+                )
+            if resp.status_code != 200:
+                return 1
+
+            data = resp.json()
+
+            # Hours left until midnight UTC
+            now = datetime.now(timezone.utc)
+            hours_left = max(1, 24 - now.hour - (now.minute / 60))
+
+            # Calculate hourly ration across all providers
+            total_hourly_ration = 0
+            providers_with_headroom = 0
+
+            for name, info in data.items():
+                remaining = info.get("remaining_today", 0)
+                daily_ration = info.get("daily_ration", 0) or info.get("free_tokens", 0)
+
+                if daily_ration <= 0 or remaining <= 0:
+                    continue
+
+                hourly_ration = remaining / hours_left
+                baseline_hourly = daily_ration / 24
+
+                # If hourly ration is >2x the baseline, this provider has excess
+                if hourly_ration > baseline_hourly * 2:
+                    providers_with_headroom += 1
+
+                total_hourly_ration += hourly_ration
+
+            # Decision based on how many providers have excess
+            if providers_with_headroom >= 4:
+                return 3  # Lots of excess — full parallel
+            elif providers_with_headroom >= 2:
+                return 2  # Some excess — moderate parallel
+            return 1      # Tight or early in the day — single-shot
+
+        except Exception:
+            return 1  # On error, conserve
 
     async def _handle_home_automation(self, filename: str, routing) -> None:
         """Route a home automation intent through Abra.

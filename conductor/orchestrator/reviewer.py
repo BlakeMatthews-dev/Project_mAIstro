@@ -126,16 +126,16 @@ class Reviewer:
 
             parsed = json.loads(cleaned)
         except (json.JSONDecodeError, IndexError):
-            logger.warning("Failed to parse reviewer output, using default scores")
-            # Fallback: give all candidates a middling score, pick first
+            logger.warning("Failed to parse reviewer output, failing closed")
+            # Fail closed: parsing failure should not quietly approve a candidate.
             scores = [  # type: ignore[assignment]
                 ReviewScore(
                     candidate_idx=i,
-                    correctness=5.0,
-                    quality=5.0,
-                    safety=5.0,
-                    completeness=5.0,
-                    overall=5.0,
+                    correctness=0.0,
+                    quality=0.0,
+                    safety=0.0,
+                    completeness=0.0,
+                    overall=0.0,
                     feedback="(unparseable review)",
                 )
                 for i in range(n_candidates)
@@ -144,28 +144,46 @@ class Reviewer:
                 subtask_id=subtask_id,
                 scores=scores,  # type: ignore[arg-type]
                 selected_idx=0,
-                selected_score=5.0,
-                feedback_summary="Review parse failed — defaulting to candidate 0",
+                selected_score=0.0,
+                feedback_summary="Review parse failed — no candidate trusted",
             )
 
         scores: list[ReviewScore] = []  # type: ignore[no-redef]
         for s in parsed.get("scores", []):
+            correctness = self._normalize_score(s.get("correctness", 5.0))
+            quality = self._normalize_score(s.get("quality", 5.0))
+            safety = self._normalize_score(s.get("safety", 5.0))
+            completeness = self._normalize_score(s.get("completeness", 5.0))
+            overall = s.get("overall")
+            if overall is None:
+                overall = (
+                    correctness * 0.4
+                    + quality * 0.2
+                    + safety * 0.2
+                    + completeness * 0.2
+                )
+            overall = self._normalize_score(overall)
             scores.append(  # type: ignore[attr-defined]
                 ReviewScore(
                     candidate_idx=s.get("candidate_idx", 0),
-                    correctness=s.get("correctness", 5.0),
-                    quality=s.get("quality", 5.0),
-                    safety=s.get("safety", 5.0),
-                    completeness=s.get("completeness", 5.0),
-                    overall=s.get("overall", 5.0),
+                    correctness=correctness,
+                    quality=quality,
+                    safety=safety,
+                    completeness=completeness,
+                    overall=overall,
                     feedback=s.get("feedback", ""),
                 )
             )
 
         selected_idx = parsed.get("selected_idx", 0)
-        selected_score = 5.0
-        if scores and 0 <= selected_idx < len(scores):
-            selected_score = scores[selected_idx].overall
+        selected_score = 0.0
+        if scores:
+            if not isinstance(selected_idx, int) or not (0 <= selected_idx < len(scores)):
+                best = max(scores, key=lambda score: score.overall)
+                selected_idx = best.candidate_idx
+                selected_score = best.overall
+            else:
+                selected_score = scores[selected_idx].overall
 
         return ReviewResult(
             subtask_id=subtask_id,
@@ -174,6 +192,14 @@ class Reviewer:
             selected_score=selected_score,
             feedback_summary=parsed.get("feedback_summary", ""),
         )
+
+    @staticmethod
+    def _normalize_score(value: object) -> float:
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            return 5.0
+        return max(0.0, min(10.0, score))
 
     @property
     def accept_threshold(self) -> float:

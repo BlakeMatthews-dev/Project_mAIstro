@@ -1427,15 +1427,15 @@ class TestIntentRouterLLMClassification:
         await router.close()
 
     @pytest.mark.asyncio
-    async def test_classify_with_llm_exception_defaults_code(self):
-        """Test that LLM failure defaults to CODE with low confidence."""
+    async def test_classify_with_llm_exception_defaults_conversation(self):
+        """Test that LLM failure defaults to low-confidence conversation."""
         router = IntentRouter(gateway_url="http://fake:9090")
 
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock, side_effect=Exception("network error")):
             result = await router._classify_with_llm("do something complex")
-            assert result.intent == Intent.CODE
-            assert result.confidence == 0.4
-            assert result.agent_name == "coder"
+            assert result.intent == Intent.CONVERSATION
+            assert result.confidence == 0.0
+            assert result.agent_name == "conversation"
         await router.close()
 
     @pytest.mark.asyncio
@@ -1974,6 +1974,20 @@ class TestBouncerLLMScreen:
 
             result = await bouncer._llm_screen("test", [])
             assert result is None
+
+    async def test_screen_flagged_input_clarifies_when_llm_unavailable(self):
+        """Flagged inputs should not auto-pass if deep screening is unavailable."""
+        bouncer = Bouncer(
+            routing_api_base="http://fake:4000",
+            routing_api_key="sk-test",
+            enable_llm_screening=True,
+        )
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.side_effect = httpx.ConnectError("Connection refused")
+            result = await bouncer.screen("please call eval(user_input) here")
+            assert result.verdict == Verdict.CLARIFY
+            assert "Code eval call" in result.risk_flags
+            assert result.follow_up_question != ""
 
     async def test_llm_screen_includes_regex_flags_in_context(self):
         """Regex flags should be included in the LLM prompt."""
