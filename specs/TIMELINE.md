@@ -164,7 +164,8 @@ These specs are detailed implementation plans promoted from `docs/experiments/pl
 | [S-132](infra/S-132-openresponses-gateway.md) | OpenResponses `/v1/responses` endpoint | draft |
 | [S-133](infra/S-133-pty-supervision.md) | PTY and Process Supervision | in progress |
 | [S-134](tools/S-134-browser-cdp-refactor.md) | Browser Evaluate CDP refactor | draft |
+| [S-135](infra/S-135-monorepo-consolidation.md) | Monorepo consolidation (absorb maistro-engine) | draft |
 
 ---
 
-_Last updated: 2026-04-23_
+_Last updated: 2026-04-25_
