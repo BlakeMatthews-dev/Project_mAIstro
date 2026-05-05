@@ -66,10 +66,16 @@ Mesh substrates collapse reachability + TLS + identity + peer connectivity into 
 |---|---|---|---|---|---|---|
 | **Tailscale** *(default-recommended)* | Yes (WireGuard) | `tailscale serve` (auto-LE for `*.ts.net`) | `tailscale funnel` | Tailscale headers (`Tailscale-User-Login`, etc.) | Client BSD; coord proprietary | Tailscale Inc. coordination |
 | **Headscale** | Yes (Tailscale-protocol) | Same as Tailscale | Funnel-equivalent (or operator reverse-proxy) | Same as Tailscale | BSD-3 (full stack) | Self-hosted coordination |
-| **NetBird** | Yes (WireGuard) | Self-signed or operator CA today; **DNS-PERSIST-01 auto-LE for mesh hostnames Q2 2026** | **Built-in Reverse Proxy (v0.65+, Feb 2026)** — auto-LE for *custom domains*, OIDC auth at the edge, path-based routing | OIDC headers (Keycloak / Auth0 / Authelia / Google / GitHub / etc.) | Apache-2 (full stack) | Self-hosted or NetBird Cloud |
+| **NetBird** | Yes (WireGuard) | Self-signed or operator CA today; **auto-LE for internal mesh hostnames pending LE DNS-PERSIST-01 production GA** (announced 2026-02-18; staging live since late Q1 2026; production GA targeted Q2 2026 — i.e. by end of June 2026) **plus NetBird's downstream integration** | **Built-in Reverse Proxy (v0.65+, Feb 2026)** — auto-LE for *custom domains*, OIDC auth at the edge, path-based routing | OIDC headers (Keycloak / Auth0 / Authelia / Google / GitHub / etc.) | Apache-2 (full stack) | Self-hosted or NetBird Cloud |
 | **ZeroTier** | Yes (Layer-2) | Self-managed (TLS terminates at conductor or sidecar) | Operator's reverse proxy on a ZT-connected gateway | **No native identity** — operator layers their own (S-149 challenge or app-layer auth) | BSL (client + controller) | Self-hosted controller or ZeroTier Central |
 
-**A note on NetBird's Reverse Proxy:** since v0.65 (Feb 2026), NetBird's built-in reverse proxy combines the functions of Tailscale Serve (HTTPS termination), Tailscale Funnel (public exposure), and Cloudflare Access (auth at the edge) into one feature. This makes NetBird more capable than Tailscale for *public-facing* deployments — it can host a custom-domain HTTPS endpoint with OIDC auth out of the box. The remaining gap (auto-certs for internal peer hostnames, equivalent to `*.ts.net`) is being closed via Let's Encrypt's DNS-PERSIST-01 challenge type, expected Q2 2026.
+**A note on NetBird's Reverse Proxy:** since v0.65 (Feb 2026), NetBird's built-in reverse proxy combines the functions of Tailscale Serve (HTTPS termination), Tailscale Funnel (public exposure), and Cloudflare Access (auth at the edge) into one feature. This makes NetBird more capable than Tailscale for *public-facing* deployments — it can host a custom-domain HTTPS endpoint with OIDC auth out of the box. The remaining gap (auto-certs for internal peer hostnames, equivalent to `*.ts.net`) is gated on:
+
+1. **Let's Encrypt DNS-PERSIST-01 production GA** — announced 2026-02-18 ([letsencrypt.org/2026/02/18/dns-persist-01](https://letsencrypt.org/2026/02/18/dns-persist-01)); staging environment live since late Q1 2026; production rollout targeted Q2 2026 (between now and end of June 2026). Currently testable via Pebble.
+2. **NetBird's downstream adoption** — once LE production-GAs the challenge type, NetBird needs to ship integration. No public NetBird timeline yet.
+3. **cert-manager support** — tracked in [cert-manager#8373](https://github.com/cert-manager/cert-manager/issues/8373), planned for late Q1 2026; relevant if NetBird's integration uses cert-manager under the hood.
+
+Until that pipeline completes, NetBird operators wanting valid certs on internal mesh hostnames have three workarounds: (a) self-signed certs with operator-distributed root, (b) [mkcert](https://github.com/FiloSottile/mkcert) for a local-only CA, or (c) point internal hostnames at the public Reverse Proxy domain (which already works today).
 
 The four mesh substrates differ on hosting (managed vs self-hosted), identity story (Tailscale account vs OIDC vs none), and license. Operators pick the one that fits their constraints; conductor code doesn't care.
 
@@ -105,7 +111,7 @@ It also fails closed: until the operator runs `tailscale funnel`, the conductor 
 
 The wizard recommends it for first-time operators. Operators with constraints (corporate policy, self-hosting preference, existing ZT/NetBird network, want fully-OSS stack with public Reverse Proxy) see the alternatives in the same menu, with honest UX about what each provides.
 
-**For operators who explicitly want a fully-OSS stack with public-facing Reverse Proxy capability:** NetBird is the strongest match — it provides everything Tailscale does *plus* a built-in equivalent of Cloudflare Tunnel, all under Apache-2.
+**For operators who explicitly want a fully-OSS stack with public-facing Reverse Proxy capability:** NetBird is the strongest match — it provides everything Tailscale does *plus* a built-in equivalent of Cloudflare Tunnel, all under Apache-2. Internal-hostname auto-cert parity arrives once LE DNS-PERSIST-01 GA + NetBird integration ship; the spec should be revisited then.
 
 ### Setup wizard step
 
@@ -225,7 +231,7 @@ None of these are deletions — they're substrate-conditional defaults:
 
 - **Tailscale integration:** prefer `tailscaled` as a sidecar (installed via the platform's package manager), controlled via the `tailscale` CLI and LocalAPI socket. Avoids embedding a Go runtime in a polyglot tree. `tsnet` (embedded library) remains an option for single-binary distributions.
 - **Headscale integration:** same as Tailscale; the only difference is the coordination URL. Documented as a one-line config change, not a separate code path.
-- **NetBird integration:** install via NetBird's distribution channels (Debian/RPM packages, Homebrew, MSI). Conductor consumes NetBird's gateway-injected OIDC headers; identity mapping uses standard email/group claims. Self-hosted NetBird Management Service is the open-source path; NetBird Cloud is the managed-service equivalent. **The Reverse Proxy is configured via NetBird's API** — conductor wizard offers to set it up automatically when the operator selects a public-facing deployment. The Q2 2026 DNS-PERSIST-01 cert flow for internal mesh hostnames will be supported once NetBird ships it; until then, internal mesh access uses self-signed or operator-CA certs.
+- **NetBird integration:** install via NetBird's distribution channels (Debian/RPM packages, Homebrew, MSI). Conductor consumes NetBird's gateway-injected OIDC headers; identity mapping uses standard email/group claims. Self-hosted NetBird Management Service is the open-source path; NetBird Cloud is the managed-service equivalent. **The Reverse Proxy is configured via NetBird's API** — conductor wizard offers to set it up automatically when the operator selects a public-facing deployment. **Internal-mesh-hostname auto-LE certs are blocked on the LE DNS-PERSIST-01 → NetBird integration pipeline** described above; revisit this spec when production GA ships (target end of Q2 2026). Until then, internal mesh access uses self-signed, mkcert, or operator-CA certs.
 - **ZeroTier integration:** install ZT One via official packages. ZT is identity-blind — the conductor adds S-149 challenge as the identity layer at the app level. Documented warning: operators using ZT must understand they're getting transport + reachability + peering, not identity.
 - **Cloudflare Tunnel integration:** ship a Medley plugin `medley install cloudflare-tunnel` that wraps `cloudflared` with our config conventions. *Note for NetBird operators:* the Reverse Proxy already covers this functionality; CF Tunnel is redundant.
 - **Identity header parsing:** the conductor's HTTP middleware reads identity from the configured header list and maps to admin / user1 per the substrate config file. Header trust requires the upstream substrate to actually set them; for manual and ZeroTier modes, operators must lock down the proxy / wrap with a challenge so untrusted clients cannot spoof headers (documented warning in setup).
@@ -244,3 +250,10 @@ None of these are deletions — they're substrate-conditional defaults:
 - Fresh install with substrate = localhost-only: dashboard at `127.0.0.1`; remote browsers refused at the socket layer.
 - Substrate switch: change config from Tailscale to NetBird; restart conductor; dashboard now reachable via the new path; old tailnet path no longer responds.
 - Pair two conductors on different mesh substrates (one Tailscale, one NetBird): federation works via S-152 DID-based peer discovery + mTLS, since they're not on the same mesh.
+
+## References
+
+- Let's Encrypt DNS-PERSIST-01 announcement (2026-02-18): [letsencrypt.org/2026/02/18/dns-persist-01](https://letsencrypt.org/2026/02/18/dns-persist-01)
+- cert-manager DNS-PERSIST-01 issue (planned late Q1 2026): [cert-manager#8373](https://github.com/cert-manager/cert-manager/issues/8373)
+- NetBird public endpoint / LetsEncrypt request: [netbirdio/netbird#2375](https://github.com/netbirdio/netbird/issues/2375)
+- NetBird internal HTTPS certs proposal: [netbirdio/netbird#5479](https://github.com/netbirdio/netbird/issues/5479)
