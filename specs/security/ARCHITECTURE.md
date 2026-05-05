@@ -3,8 +3,8 @@
 _A white paper / README hybrid. Read top-to-bottom for the design rationale, or jump to **Quick Reference** if you just need to wire something up._
 
 **Status:** living document
-**Last updated:** 2026-04-25
-**Audience:** operators deploying maistro, contributors adding tools or channels, reviewers evaluating it against alternatives (OpenClaw, etc.)
+**Last updated:** 2026-04-25 (OpenClaw comparison filled in from public sources)
+**Audience:** operators deploying maistro, contributors adding tools or channels, reviewers evaluating it against alternatives.
 
 ---
 
@@ -18,7 +18,7 @@ The defense is layered:
 2. **Pre-execution screen** — the **Bouncer** runs a 20+ pattern regex sweep plus an LLM negative pass on every prompt before it can reach an agent that holds tools.
 3. **Capability scoping** — agents are spawned with explicit `AgentRole` + tool whitelist; conversation-only intents get zero tools; secrets are read on demand from Vaultwarden, never from disk.
 4. **Skill safety** — trust tiers, gitleaks scan, and **Phantom Execution** sandbox runs gate every skill before it can touch live state.
-5. **Adversarial self-hardening** — a Red/Blue agent pair continuously generates attacks against the conductor and feeds the Bouncer’s pattern library.
+5. **Adversarial self-hardening** — a Red/Blue agent pair continuously generates attacks against the conductor and feeds the Bouncer's pattern library.
 6. **Audit** — every long-term memory write is git-committed; every inference call is Langfuse-traced; the dashboard exposes a forensic Intel tab.
 
 Nothing here is novel cryptography. The novelty is the integration: a single, spec-tracked story for how an autonomous agent handles untrusted input end-to-end.
@@ -91,7 +91,7 @@ Everything south of the Bouncer is treated as in-scope of the same trust boundar
 References: **S-017**, **S-018**, **S-019**, **S-024**
 
 - **Single SSO**: 42 reverse-proxied services + 6 native OIDC services authenticate against one Keycloak realm. No service-local password store.
-- **JWT**: RS256 (asymmetric). Conductor validates tokens against Keycloak’s JWKS endpoint; key rotation is automatic.
+- **JWT**: RS256 (asymmetric). Conductor validates tokens against Keycloak's JWKS endpoint; key rotation is automatic.
 - **Role → tool mapping**: roles in JWT claims map to tool whitelists in `AgentSpec`. A role missing the `file_ops` claim cannot be granted file-write tools, ever, regardless of intent classification.
 - **Dashboard**: `oauth2-proxy` sits in front of conductor-dash. No request reaches the dashboard backend without a valid Keycloak session.
 - **OpenWebUI passthrough**: when chat originates from OpenWebUI, the upstream session is forwarded as `X-OpenWebUI-*` headers and re-validated rather than trusted blindly.
@@ -128,17 +128,17 @@ References: **S-022**, **S-026**
 The Bouncer is a two-stage gate that every prompt and every tool argument passes through before reaching an agent that holds tools.
 
 **Stage 1 — Regex sweep (synchronous, ~1ms):**
-- 20+ patterns covering: prompt-injection idioms (“ignore previous instructions”), data-exfil patterns (suspicious URL constructions, base64 over thresholds), tool-coercion patterns (“run this command” outside a code block), and known jailbreak rituals.
+- 20+ patterns covering: prompt-injection idioms ("ignore previous instructions"), data-exfil patterns (suspicious URL constructions, base64 over thresholds), tool-coercion patterns ("run this command" outside a code block), and known jailbreak rituals.
 - A regex hit is **non-recoverable**: the request is rejected with `TOOL_VIOLATION` or `SAFETY_VIOLATION` and logged to the dashboard Security tab.
 
 **Stage 2 — LLM negative pass (asynchronous, ~200ms):**
-- A small, fast model is asked the inverse question: _“Is there any reason this prompt should NOT be processed?”_
-- Used for ambiguous cases where regex is too brittle (e.g., social-engineering attempts that don’t use known phrasings).
+- A small, fast model is asked the inverse question: _"Is there any reason this prompt should NOT be processed?"_
+- Used for ambiguous cases where regex is too brittle (e.g., social-engineering attempts that don't use known phrasings).
 
 **Self-hardening loop — S-026:**
 - A **Red agent** continuously generates attack prompts against a sandboxed conductor.
 - A **Blue agent** observes which attacks succeed and proposes new regex patterns.
-- Promoted patterns land in the Bouncer’s library after a human-review gate. Findings are surfaced in the dashboard.
+- Promoted patterns land in the Bouncer's library after a human-review gate. Findings are surfaced in the dashboard.
 
 ### 3.4 Capability Scoping — AgentSpec
 
@@ -154,7 +154,7 @@ References: **S-002**, **S-005**, **S-003**, **S-004**, **S-007**, **S-010**
 
 References: **S-035**, **S-030**, **S-037**, **S-038**, **S-111**
 
-A “skill” is a `SKILL.md` + executable bundle that the conductor can invoke. Trust is not binary:
+A "skill" is a `SKILL.md` + executable bundle that the conductor can invoke. Trust is not binary:
 
 | Tier | What it can do | How it gets there |
 |---|---|---|
@@ -180,7 +180,7 @@ References: **S-131**, **S-041**, **S-103**, **S-019**
 
 References: **S-021**, **S-033**, **S-028**, **S-016**
 
-- **Langfuse** traces every inference call: prompt, model, tools called, tokens, latency, score. The dashboard’s Intel tab is a Langfuse trace browser with annotation scoring.
+- **Langfuse** traces every inference call: prompt, model, tools called, tokens, latency, score. The dashboard's Intel tab is a Langfuse trace browser with annotation scoring.
 - **Memory evolution history (S-033)**: every write to long-term memory is git-committed with a structured message. Diffable audit trail; you can `git blame` a stale belief.
 - **Context Archaeology (S-028)**: on task failure, reconstructs the decision chain from traces, memory layers, and tool calls. Designed for forensic post-mortem rather than line-by-line debugging.
 - **Dashboard surfacing (S-016)**: Security tab lists Bouncer denials, Red Team findings, and pending Phantom reports.
@@ -191,7 +191,7 @@ References: **S-021**, **S-033**, **S-028**, **S-016**
 
 References: **S-026**, **S-027**, **S-113** (planned)
 
-The conductor doesn’t wait to be attacked in production:
+The conductor doesn't wait to be attacked in production:
 
 - **Red/Blue (S-026)** runs continuously. The Red agent has the prompt history of recent successful Bouncer denials and a free-form mandate to find one new bypass. The Blue agent watches for Red successes against a sandboxed twin and proposes patches.
 - **Tournament Arena (S-027)** scores models on structured attack-defense tasks; ELO-style leaderboard tracks which model+prompt combinations are most resistant.
@@ -201,29 +201,67 @@ This loop is not a substitute for human review of patches — promoted Bouncer p
 
 ---
 
-## 5. Comparison Framework (vs. OpenClaw)
+## 5. Comparison — Project mAIstro vs. OpenClaw
 
-This table is the comparison axis we’d run against any peer system. The maistro column is filled in below; the OpenClaw column is intentionally blank pending access to that codebase.
+OpenClaw is the most-starred open-source personal-AI-agent project of early 2026 (>150K GitHub stars within weeks of launch). Its surface looks similar to maistro's: a local gateway daemon (`ws://127.0.0.1:18789`, systemd / LaunchAgent), a skill ecosystem with thousands of community contributions, and integrations with messaging platforms. It has therefore drawn the most public security analysis of any agent framework in this class — including a CrowdStrike write-up flagging it as a potential "AI backdoor" risk when misconfigured, and a Cisco AI-security finding that a third-party OpenClaw skill performed undisclosed data exfiltration. The canonical hardening guide is `slowmist/openclaw-security-practice-guide` (v2.8 at time of writing).
+
+The two systems share a threat surface but make different bets about *where* to put the defense. The table below maps maistro’s controls onto the same axes used in OpenClaw’s public guide; the discussion in 5.1 explains where the philosophies diverge.
 
 | Axis | Project mAIstro | OpenClaw |
 |---|---|---|
-| **AuthN** | Keycloak RS256 JWT, OIDC, JWKS rotation (S-024) | _TBD_ |
-| **AuthZ** | Role → tool whitelist in `AgentSpec`; per-user session scope (S-010) | _TBD_ |
-| **Perimeter** | oauth2-proxy + Keycloak in front of every service (S-017, S-018) | _TBD_ |
-| **Secrets management** | Vaultwarden API; no plaintext on disk; gitleaks pre-commit (S-023, S-109) | _TBD_ |
-| **Prompt-injection defense** | Bouncer: 20+ regex + LLM negative pass (S-022) | _TBD_ |
-| **Capability scoping** | Typed `AgentSpec`, immutable, role-keyed tool whitelist (S-002–S-005) | _TBD_ |
-| **Tool / skill sandboxing** | 4-tier trust + Phantom Execution shadow run (S-030, S-035) | _TBD_ |
-| **Marketplace integrity** | gitleaks scan + (planned) signed publishes (S-037, S-111) | _TBD_ |
-| **Channel allowlists** | Telegram normalized (S-131); voice/email allowlist (S-041, S-103) | _TBD_ |
-| **Audit trail** | Langfuse traces + git-committed memory writes (S-021, S-033) | _TBD_ |
-| **Adversarial self-test** | Continuous Red/Blue (S-026); Tournament Arena (S-027) | _TBD_ |
-| **Forensic post-mortem** | Context Archaeology (S-028); Intel dashboard tab (S-016) | _TBD_ |
-| **Per-tenant isolation** | Per-user session_id scope; memory retrieval keyed on user_id (S-010) | _TBD_ |
-| **Failure-closed default** | Bouncer hits return non-recoverable; default tool list is empty (S-004) | _TBD_ |
-| **Disclosure / response** | `SECURITY.md` at repo root | _TBD_ |
+| **AuthN** | Keycloak RS256 JWT, OIDC, JWKS rotation (S-024) | No formal AuthN. Gateway daemon binds to `ws://127.0.0.1:18789` and trusts the local-machine boundary. Hardening guide relies on `chmod 600` on token files and OS-level user separation. |
+| **AuthZ** | Role → tool whitelist in `AgentSpec`; per-user session scope (S-010) | "Permission narrowing & Cross-Skill Pre-flight Checks" enforced by the engine + agent self-judgment, not a typed capability envelope. `exec-approvals.json` is the runtime authorization surface. |
+| **Perimeter** | oauth2-proxy + Keycloak in front of every service (S-017, S-018) | None native. Loopback-only WebSocket; remote exposure (e.g., on a VPS) is the operator's responsibility and is the headline misconfiguration vector flagged by CrowdStrike. |
+| **Secrets management** | Vaultwarden API; no plaintext on disk; gitleaks pre-commit (S-023, S-109) | File-separated tokens with `chmod 600` (e.g., Telegram bot token). Optional advice: "instruct the Agent to encrypt the data before executing" git backups. No vault integration in the core guide. |
+| **Prompt-injection defense** | Bouncer: 20+ regex + LLM negative pass on every prompt (S-022) | "Behavior blacklists" + agent self-policing against a red-line command list. Acknowledged limitation: "relies on the AI Agent autonomously determining whether a command hits a red line" — weaker models systematically misjudge. |
+| **Capability scoping** | Typed `AgentSpec`, immutable, role-keyed tool whitelist (S-002–S-005) | In-action permission narrowing; configuration in `openclaw.json` / `exec-approvals.json`. No equivalent of an empty-tools `CONVERSATION` role. |
+| **Tool / skill sandboxing** | 4-tier trust + Phantom Execution shadow run (S-030, S-035) | Skill *inspection* on install, update, abnormal behavior, or fingerprint mismatch. `chattr +i` to lock core configs (note: never `exec-approvals.json`). No shadow-execution sandbox in the public guide. |
+| **Marketplace integrity** | gitleaks scan + (planned) signed publishes (S-037, S-111) | Skill registry exists (>5,400 skills via VoltAgent's curated awesome-list). Cisco found a malicious skill performing data exfiltration, noting "the skill repository lacked adequate vetting." |
+| **Channel allowlists** | Telegram normalized (S-131); voice/email allowlist (S-041, S-103) | Telegram bot token handling covered for audit notifications; broader channel allowlists not in the guide. |
+| **Audit trail** | Langfuse traces (per-call) + git-committed memory writes (S-021, S-033) | Nightly automated audit, 13 core metrics, persistent reports in `$OC/security-reports/` with 30-day rotation. Brain-git backup for disaster recovery. |
+| **Real-time vs post-hoc** | Real-time (Bouncer pre-execution) + per-call traces | Explicitly post-hoc: "Nightly audits … can only discover anomalies that have already occurred and cannot roll back damage already done." |
+| **Adversarial self-test** | Continuous Red/Blue (S-026); Tournament Arena (S-027) | Validation guides for red-teaming exist (`Validation-Guide-en.md`); not described as continuous. |
+| **Forensic post-mortem** | Context Archaeology (S-028); Intel dashboard tab (S-016) | Nightly audit reports + git history of the "Brain" workspace. |
+| **Per-tenant isolation** | Per-user session_id scope; memory retrieval keyed on user_id (S-010) | Single-user model by design. v2.8 adds `--light-context` cron protection to keep audit sessions from being hijacked by workspace context. |
+| **Failure-closed default** | Bouncer hits return non-recoverable; default tool list is empty (S-004) | "When in doubt, treat it as a red line" — fail-closed *philosophy*, but enforced by the agent's own judgment rather than a hard gate. |
+| **Engine trust assumption** | Conductor binary is trusted; secrets and tools never leave the orchestrator process | Same. Guide explicitly: "all built on the assumption that 'the engine itself is trustworthy' and cannot defend against engine-level vulnerabilities." |
+| **Disclosure / response** | `SECURITY.md` at repo root | GitHub Security tab; SlowMist guide is community-maintained. |
 
-Fill the right column once OpenClaw is in scope. The rows are ordered roughly by blast radius if a layer fails.
+### 5.1 Where the philosophies diverge
+
+**Pre-execution gate vs. behavioral red-lines.**
+maistro's Bouncer is a hard, code-driven filter: regex hits return non-recoverable errors. OpenClaw's red-line system asks the *agent itself* whether a command crosses a line, with the operator backstopping via nightly audits. The OpenClaw guide is upfront that this depends on model strength — "weaker models may systematically misjudge." maistro pays for the harder gate with brittleness (regex misses novel attacks; the LLM negative pass catches some but not all), but the failure mode is observable in real time, not a 24-hour audit cycle later.
+
+**Capability typing vs. runtime config.**
+maistro's `AgentSpec` is constructed by code paths the operator controls (intent classifier, heartbeat runner) and is immutable for the duration of a turn. OpenClaw's permissions live in `exec-approvals.json` and are enforced at execution time by the engine. The OpenClaw guide warns to *not* `chattr +i` that file because the engine writes to it at runtime — which is exactly the surface maistro avoids by making the capability envelope a constructed Python object that never round-trips through disk.
+
+**Skill safety: shadow-run vs. fingerprint.**
+OpenClaw's skill model trusts post-install audit + fingerprint matching to detect tampering after the fact. maistro inserts Phantom Execution *before* a skill ever runs against live state: any side-effect attempt (writes, network calls, env reads) is recorded against a synthetic input set. The Cisco finding (a malicious skill performing data exfil that the registry's review missed) is exactly the failure mode Phantom is designed to catch — not by reading the skill's code, but by watching what it *does* in a sandboxed run.
+
+**Secrets: vault vs. file permissions.**
+Vaultwarden gives maistro per-secret access logs and revocation. OpenClaw's `chmod 600` model is simpler and works without external infrastructure, but every skill the agent runs inherits the agent's UID and therefore every file readable by it. maistro pays for this with operational complexity (a Vaultwarden instance must exist and be healthy) but gains the ability to scope, rotate, and audit secret reads.
+
+**Audit cadence.**
+Langfuse-per-call vs. nightly is the most striking gap. maistro's audit signal is available at debug time ("why did this agent call that tool with these args?") and at incident time ("replay the last 24 hours of denials"). OpenClaw's nightly model is cheaper to run but, by the guide's own admission, cannot prevent or roll back damage — only detect it.
+
+**Perimeter.**
+The largest delta. maistro assumes an adversarial LAN and gates every service behind Keycloak + oauth2-proxy. OpenClaw assumes a trusted local machine and pushes the perimeter responsibility entirely onto the operator. CrowdStrike's risk write-up is essentially a long way of saying "users misconfigure perimeters, and OpenClaw provides nothing native to stop them."
+
+### 5.2 Where OpenClaw is ahead (or equivalent)
+
+- **Filesystem immutability**: `chattr +i` on core config files is a layer maistro doesn't currently have. Adding the equivalent to conductor configs (everywhere except files the engine must write at runtime) is cheap and should be on the roadmap. _→ Action: file as a follow-up spec._
+- **Operational simplicity**: OpenClaw runs without Keycloak, Vaultwarden, Postgres, oauth2-proxy. For a single-machine deploy, the maistro stack is heavier. The tradeoff is deliberate — maistro is built for multi-channel, multi-user use — but worth being honest about.
+- **Public security ecosystem**: SlowMist's third-party hardening guide, VoltAgent's curated awesome-skills list, and the broader audit volume around OpenClaw represent battle-testing maistro can’t match by virtue of scale. The right response is to keep the spec tree open and the threat model explicit, so external review is tractable.
+
+### 5.3 Where they share assumptions (and therefore share risks)
+
+Both systems explicitly assume the engine itself is trustworthy. Neither defends against:
+- A compromised inference backend returning malicious tool-call sequences (maistro mitigates partially via per-call Langfuse + Bouncer on tool args; OpenClaw via permission narrowing; neither *prevents* it).
+- Supply-chain compromise of upstream LLM weights.
+- Hardware-level compromise of the host.
+- Any vulnerability in the orchestrator binary itself.
+
+This is a real residual risk and should be stated plainly to operators of either system.
 
 ---
 
@@ -237,8 +275,9 @@ Fill the right column once OpenClaw is in scope. The rows are ordered roughly by
 | Skill pruning is manual; weak skills accumulate | S-112 | planned |
 | Chaos coverage is informal | S-113 | planned |
 | Cross-instance memory sharing has no privacy story | S-114 | research |
-| Heartbeat-task tool-call cap is implicit, not spec’d as a security control | S-105 | draft |
+| Heartbeat-task tool-call cap is implicit, not spec'd as a security control | S-105 | draft |
 | Confidence decay on stale learnings is not implemented | S-107 | draft |
+| No filesystem-level immutability on core configs (parity with OpenClaw `chattr +i`) | _new_ | proposed (follow-up to this comparison) |
 
 Nothing in this list represents a known exploitable hole; they are places where a defense-in-depth layer is incomplete or where a control is enforced in code but not yet codified in a spec.
 
@@ -257,7 +296,7 @@ Nothing in this list represents a known exploitable hole; they are places where 
 
 **For a contributor adding a tool:**
 
-1. Add the tool to a role’s whitelist in `agent_spec.py` — do not bypass `AgentSpec`.
+1. Add the tool to a role's whitelist in `agent_spec.py` — do not bypass `AgentSpec`.
 2. Decide which intent classifier branches can route to roles that hold the tool. Only those branches.
 3. Write a SKILL.md, run it through Phantom locally, and submit with the trace.
 4. If the tool reads a secret, use `secrets.get("name")`, never `os.environ`.
@@ -274,9 +313,11 @@ Nothing in this list represents a known exploitable hole; they are places where 
 
 ## 8. References
 
+### maistro specs
+
 All references are stable spec IDs in `specs/`. Each spec carries its own acceptance criteria, file pointers, and verification steps.
 
-- Auth & perimeter: [S-017](S-017-dashboard-auth.md placeholder — actual: `../infra/S-017-dashboard-auth.md`), [S-018](../infra/S-018-keycloak-migration.md), [S-019](../infra/S-019-openwebui-jwt.md), [S-024](S-024-jwt-auth.md)
+- Auth & perimeter: [S-017](../infra/S-017-dashboard-auth.md), [S-018](../infra/S-018-keycloak-migration.md), [S-019](../infra/S-019-openwebui-jwt.md), [S-024](S-024-jwt-auth.md)
 - Secrets: [S-023](S-023-secrets-manager.md), [S-109](S-109-secrets-migration.md)
 - Input filter: [S-022](S-022-bouncer.md), [S-026](../intelligence/S-026-adversarial-hardening.md)
 - Capability scoping: [S-002](../conductor/S-002-factory-spawner.md), [S-003](../conductor/S-003-artifact-intent.md), [S-004](../conductor/S-004-conversation-intent.md), [S-005](../conductor/S-005-agent-factory.md), [S-007](../conductor/S-007-3-phase-classifier.md), [S-010](../conductor/S-010-session-isolation.md)
@@ -284,5 +325,15 @@ All references are stable spec IDs in `specs/`. Each spec carries its own accept
 - Channels: [S-041](../channels/S-041-voice-agent.md), [S-103](../channels/S-103-email-channel.md), [S-131](S-131-group-policy-hardening.md)
 - Audit: [S-016](../infra/S-016-dashboard-ui.md), [S-021](../infra/S-021-service-integration.md), [S-028](../intelligence/S-028-context-archaeology.md), [S-033](../intelligence/S-033-memory-evolution.md)
 - Self-hardening: [S-026](../intelligence/S-026-adversarial-hardening.md), [S-027](../intelligence/S-027-tournament-arena.md), [S-113](../tools/S-113-stress-rehearsal.md)
+
+### OpenClaw sources (used for §5 comparison)
+
+- OpenClaw repo: https://github.com/openclaw/openclaw
+- OpenClaw `AGENTS.md`: https://github.com/openclaw/openclaw/blob/main/AGENTS.md
+- SlowMist Security Practice Guide (v2.7 / v2.8): https://github.com/slowmist/openclaw-security-practice-guide
+- VoltAgent curated skills index: https://github.com/VoltAgent/awesome-openclaw-skills
+- CrowdStrike risk write-up: https://www.crowdstrike.com/en-us/blog/what-security-teams-need-to-know-about-openclaw-ai-super-agent/
+- NVIDIA / Nemotron Labs commentary: https://blogs.nvidia.com/blog/what-openclaw-agents-mean-for-every-organization/
+- freeCodeCamp build-and-secure walkthrough: https://www.freecodecamp.org/news/how-to-build-and-secure-a-personal-ai-agent-with-openclaw
 
 Disclosure policy and contact: see [`SECURITY.md`](../../SECURITY.md) at the repo root.
