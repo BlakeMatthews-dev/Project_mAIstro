@@ -1,6 +1,6 @@
 ---
 id: S-153
-title: "Networking & identity substrate — Tailscale by default, pluggable"
+title: "Networking & identity substrate — Tailscale recommended, mesh substrates pluggable"
 domain: infra
 status: draft
 priority: P1
@@ -24,7 +24,7 @@ Agent Conductor needs all of:
 - Identity-verified connections (who is making this request?)
 - Access control distinguishing admin from user1 (S-142)
 
-Different operators have different constraints (corporate Tailscale ban, philosophical preference for self-hosting, single-machine offline use, existing Cloudflare account, etc.). The conductor must:
+Different operators have different constraints (corporate Tailscale ban, philosophical preference for self-hosting, single-machine offline use, existing Cloudflare account, existing ZeroTier network, etc.). The conductor must:
 
 1. **Work out of the box for the easy case** — a typical household operator should reach a working HTTPS dashboard in under five minutes with one decision.
 2. **Not require any specific vendor** — the conductor's core must function on top of any substrate that provides reachability, TLS, and per-request identity.
@@ -55,29 +55,52 @@ No conductor code is substrate-aware. Substrate-specific glue lives in `~/.condu
 
 ### Supported substrates
 
-| Substrate | Reachability | TLS | Identity | Peer |
-|---|---|---|---|---|
-| **Tailscale (default-recommended)** | MagicDNS: `<instance>.<tailnet>.ts.net` | Automatic via Tailscale's Let's Encrypt | Tailscale headers (`Tailscale-User-Login`, etc.) | Mesh; automatic |
-| **Headscale** | Same as Tailscale, self-hosted coord server | Same | Same | Same |
-| **Cloudflare Tunnel** | Operator's hostname via `cloudflared` | Auto via Cloudflare | Cloudflare Access JWT (if configured) | Manual / via DID resolution |
-| **LAN-only (mDNS)** | `<instance>.local` | Self-signed or [mkcert](https://github.com/FiloSottile/mkcert) | None native; conductor falls back to S-149 keypair challenge at app layer | LAN broadcast |
-| **Localhost-only** | `127.0.0.1` | Self-signed (or skipped) | Unix socket peer-cred (`SO_PEERCRED`) | N/A (single machine) |
-| **Manual reverse-proxy** | Operator's domain via Caddy / nginx / Traefik | Operator's responsibility | Whatever the proxy injects (`Forwarded`, `X-Auth-Request-User`, etc.) | Manual |
+Four categories, eight implementations.
 
-**Tailscale is the *recommended default*, not a requirement.** Operators choose their substrate at install time; the choice is reversible.
+#### Mesh substrates (recommended class)
+
+Mesh substrates collapse reachability + TLS + identity + peer connectivity into one decision. They're the right answer for a typical Conductor deployment.
+
+| Substrate | Reachability | TLS | Identity | Peer | License | Hosting |
+|---|---|---|---|---|---|---|
+| **Tailscale** *(default-recommended)* | MagicDNS: `<instance>.<tailnet>.ts.net` | Auto via `tailscale serve` (Let's Encrypt) | Tailscale headers (`Tailscale-User-Login`, etc.) | Mesh, automatic | Client BSD; coord proprietary | Tailscale Inc. coordination |
+| **Headscale** | Same as Tailscale, against a self-hosted coord server | Same | Same | Same | BSD-3 (full stack) | Self-hosted coordination |
+| **NetBird** | NetBird MagicDNS or configured DNS | Auto via NetBird gateway, or operator-managed | OIDC identity passed in headers (Keycloak / Auth0 / Authelia / Google / GitHub / etc.) | Mesh, automatic | Apache-2 (full stack) | Self-hosted or NetBird Cloud |
+| **ZeroTier** | ZT-DNS or ZT IP | Self-managed (TLS terminates at conductor or sidecar) | **No native identity** — operator layers their own (S-149 challenge or app-layer auth) | Mesh, automatic | BSL (client + controller) | Self-hosted controller or ZeroTier Central |
+
+The four mesh substrates differ on hosting (managed vs self-hosted), identity story (Tailscale account vs OIDC vs none), and license. Operators pick the one that fits their constraints; conductor code doesn't care.
+
+#### Tunnel substrates
+
+| Substrate | Reachability | TLS | Identity | Peer | Notes |
+|---|---|---|---|---|---|
+| **Cloudflare Tunnel** | Operator's hostname via `cloudflared` | Auto via Cloudflare | Cloudflare Access JWT (if configured) | Manual / via DID resolution | Easy public exposure; CF sees metadata |
+
+#### Local-only substrates
+
+| Substrate | Reachability | TLS | Identity | Peer | Notes |
+|---|---|---|---|---|---|
+| **LAN-only (mDNS)** | `<instance>.local` | Self-signed or [mkcert](https://github.com/FiloSottile/mkcert) | None native; S-149 keypair challenge at app layer | LAN broadcast | Same-network only |
+| **Localhost-only** | `127.0.0.1` | Self-signed (or skipped) | Unix socket peer-cred (`SO_PEERCRED`) | N/A (single machine) | Always-available floor |
+
+#### Manual
+
+| Substrate | Notes |
+|---|---|
+| **Manual reverse-proxy** | Operator wires up Caddy / nginx / Traefik / something else; conductor accepts cleartext on `127.0.0.1` and trusts a configured identity header. |
 
 ### Why Tailscale is the recommended default
 
-For a typical household / single-machine deploy, Tailscale collapses four otherwise-separate problems into one decision:
+For a typical household / single-machine deploy with no prior infrastructure, Tailscale collapses four problems into one decision:
 
-- HTTPS with auto-renewing certs (`tailscale serve`)
+- HTTPS with auto-renewing certs
 - Stable address (MagicDNS)
-- Identity on every connection (no oauth2-proxy, no Keycloak)
-- Mesh peering for federation (no port-forwarding, no DDNS)
+- Identity on every connection
+- Mesh peering for federation
 
-It also fails closed by default: until the operator runs `tailscale funnel`, the conductor is *unreachable from the public internet*. That's the right failure mode for an AI agent that holds credentials.
+It also fails closed: until the operator runs `tailscale funnel`, the conductor is *unreachable from the public internet*. That's the right failure mode for an AI agent that holds credentials.
 
-For operators who can't or won't use Tailscale Inc.'s coordination server, **Headscale** (open-source, self-hosted) provides the identical UX. The wizard treats it as a sibling option, not an obscure flag.
+The wizard recommends it for first-time operators. Operators with constraints (corporate policy, self-hosting preference, existing ZT/NetBird network) see the alternatives in the same menu, with honest UX about what each provides.
 
 ### Setup wizard step
 
@@ -85,28 +108,29 @@ During S-139 setup, after the seed phrase ceremony:
 
 ```
 ? Network this conductor:
-  > Tailscale  (recommended; works out of the box)
-      → Sign in with Tailscale to add this conductor to your tailnet.
-      → HTTPS, identity, and federation are configured automatically.
-  
-    Headscale  (self-hosted, same UX)
-      → Enter HEADSCALE_URL: ____
-  
-    Cloudflare Tunnel
-      → Enter your Cloudflare account / tunnel ID.
-  
-    LAN-only (mDNS)
-      → Reachable from this network only. Self-signed cert.
-  
-    Localhost-only
-      → No network exposure. CLI / local dashboard only.
-  
-    Manual / bring-your-own
-      → You'll wire up reachability, TLS, and identity yourself.
-         The conductor listens on 127.0.0.1:<port> and trusts a header you configure.
+
+  Mesh substrates  (recommended; reachability + HTTPS + identity + peering)
+  > Tailscale          managed coordination, simplest setup
+    Headscale          self-hosted Tailscale-compatible coordination
+    NetBird            open-source mesh with OIDC identity
+    ZeroTier           Layer-2 mesh; bring your own identity layer
+
+  Tunnel substrates
+    Cloudflare Tunnel  operator's domain via cloudflared
+
+  Local-only
+    LAN-mDNS           same-network reachable, self-signed cert
+    Localhost-only     no network exposure (CLI / local dashboard only)
+
+  Manual
+    Bring-your-own     wire up reachability, TLS, and identity yourself
 ```
 
-Every option produces a working conductor. The default highlight on Tailscale is a recommendation, not a gate.
+Every option produces a working conductor. The default highlight on Tailscale is a recommendation, not a gate. Selecting any of the four mesh substrates triggers the substrate-specific auth flow:
+
+- **Tailscale / Headscale:** browser-based auth-key flow; Headscale prompts for `HEADSCALE_URL` first.
+- **NetBird:** browser-based OIDC sign-in against the configured NetBird management URL (NetBird Cloud or self-hosted).
+- **ZeroTier:** prompt for network ID + auth (operator authorizes the conductor in ZT Central or self-hosted controller); follow-up prompt for the identity layer the operator wants stacked on top (S-149 challenge, basic auth, or external IdP).
 
 ### Identity mapping (substrate-agnostic)
 
@@ -118,66 +142,97 @@ identity_headers = ["Tailscale-User-Login"]
 admin_match = { type = "group", value = "group:conductor-admin" }
 user_match = { type = "group", value = "group:conductor-user" }
 
+# ~/.conductor/substrate/netbird.toml
+identity_headers = ["X-NetBird-User-Email", "X-Auth-Request-Email"]
+admin_match = { type = "email", value = "blake@example.com" }
+user_match = { type = "email-domain", value = "example.com" }
+
+# ~/.conductor/substrate/zerotier.toml
+# ZT has no native identity — conductor falls back to S-149 challenge
+identity_mode = "keypair-challenge"
+admin_pubkeys = ["<m/0' pubkey for admin>"]
+user_pubkeys  = ["<derived child pubkey for user1>"]
+
 # ~/.conductor/substrate/cloudflare.toml
 identity_headers = ["Cf-Access-Authenticated-User-Email"]
 admin_match = { type = "email", value = "blake@example.com" }
 user_match = { type = "email-domain", value = "example.com" }
 ```
 
-S-142's admin/user1 split is enforced *inside* the conductor against the substrate-attested identity. This means:
+S-142's admin/user1 split is enforced *inside* the conductor against the substrate-attested identity. Tailscale and Headscale map cleanly to group ACLs; NetBird and Cloudflare to OIDC email/group claims; ZeroTier to S-149 keypair challenges since ZT itself is identity-blind.
 
-- Tailscale ACLs map cleanly (group memberships)
-- Cloudflare Access policies map cleanly (email + group claims)
-- LAN/manual modes require an explicit admin password / signed challenge as the fallback identity proof (still satisfying "admin is verified before being trusted")
+### Public exposure (per substrate)
 
-### Tailscale Funnel for explicit public exposure
+Some endpoints benefit from being publicly resolvable: the `did:web` document (S-152), the Lightning receive endpoint (S-151), an opt-in public message-board page.
 
-When the substrate is Tailscale, some endpoints benefit from being publicly resolvable:
+| Substrate | Public-exposure mechanism |
+|---|---|
+| Tailscale | `tailscale funnel` per path |
+| Headscale | Headscale's funnel-equivalent (or operator-fronted reverse proxy) |
+| NetBird | NetBird's exit-node / port-forwarding configuration |
+| ZeroTier | Operator's public reverse proxy on a ZT-connected gateway host |
+| Cloudflare Tunnel | Native (the substrate IS public exposure); per-path Cloudflare Access policies |
+| LAN-mDNS / Localhost-only | Not applicable; operator must add a substrate for public exposure |
+| Manual | Operator's reverse proxy |
 
-- The `did:web` document (S-152) so external parties can verify VCs
-- The Lightning receive endpoint (S-151) for tips
-- A specific public message-board page if the operator chooses to share
+Dashboard configures public exposure per-endpoint. **Defaults: nothing is public.** Operator opts in.
 
-Dashboard configures `tailscale funnel` per-endpoint. Defaults: all unchecked. Equivalent functionality on other substrates: Cloudflare Tunnel public hostname; manual reverse-proxy public path.
-
-### What this changes elsewhere
+### Ripple effects on existing specs
 
 None of these are deletions — they're substrate-conditional defaults:
 
-| Spec | When the substrate is Tailscale | When the substrate is something else |
+| Spec | When the substrate is a mesh option (TS / Headscale / NetBird / ZeroTier) | When the substrate is a tunnel / local-only / manual option |
 |---|---|---|
 | S-101 (Traefik dashboard route) | Not needed | Used as documented (or replaced by the substrate's TLS layer) |
-| S-017 (Dashboard auth) | Tailscale identity replaces oauth2-proxy + Keycloak | oauth2-proxy + Keycloak still applies (or substrate-specific equivalent) |
-| S-115 (Agent-to-agent networking) | Default transport: tailnet mesh | Default transport: DID-based discovery + mTLS (S-152 keypair) |
-| S-152 (DID + VC) | `did:web` hosted automatically by Tailscale Serve | `did:web` hosted by whichever substrate exposes the conductor's HTTPS endpoint, or `did:key`-only if no public surface |
-| S-139 (Setup wizard) | Adds a one-click Tailscale step | Substrate menu offers all options as peers |
+| S-017 (Dashboard auth) | Substrate identity replaces oauth2-proxy + Keycloak | oauth2-proxy + Keycloak still applies (or substrate-specific equivalent) |
+| S-018, S-019, S-024 | Stronghold-only as default | Lite mode falls back to substrate-native identity or S-149 challenge |
+| S-115 (Agent-to-agent networking) | Default transport: substrate mesh | Default transport: DID-based discovery + mTLS (S-152 keypair) |
+| S-114 (Collective Unconscious) | Trust handshake over mesh, paired with VCs from S-152 | Same handshake, transport over the configured tunnel/manual substrate |
+| S-152 (DID + VC) | `did:web` hosted automatically by the substrate's HTTPS layer | `did:web` hosted by tunnel / operator's proxy, or `did:key`-only if no public surface |
+| S-141 (Vault) | Substrate auth keys (Tailscale auth key, NetBird OIDC token, ZT API key) stored as vault entries | Same |
+| S-139 (Setup wizard) | Adds substrate-specific auth step | Substrate menu offers all options |
+
+### Security posture
+
+- All conductor endpoints are non-public by default. A misconfigured conductor cannot accidentally be exposed to the public internet — it's not on the public internet without an explicit per-path opt-in.
+- Mesh substrates provide end-to-end encryption between every member of the mesh. The conductor never accepts unencrypted connections.
+- Identity is verified at the substrate layer, before bytes reach the conductor process — *except* for ZeroTier, where the conductor must enforce S-149 challenge at the application layer because ZT itself is identity-blind. The wizard surfaces this distinction in plain language.
+- Substrate auth keys are scoped (single-use, ephemeral, or reusable, depending on the substrate). The wizard creates a single-use key for the install ceremony where possible; the conductor regenerates a longer-lived key for itself after first authentication.
 
 ## Acceptance Criteria
 
-- [ ] Conductor's networking layer is implemented as a substrate abstraction; no conductor code references Tailscale directly
-- [ ] All listed substrates can be selected at setup time and reconfigured later without reinstall
+- [ ] Conductor's networking layer is implemented as a substrate abstraction; no conductor code references any specific substrate directly
+- [ ] All eight substrates (Tailscale, Headscale, NetBird, ZeroTier, Cloudflare Tunnel, LAN-mDNS, localhost-only, manual) can be selected at setup time and reconfigured later without reinstall
 - [ ] On Tailscale-paired install: dashboard reachable at `https://<instance>.<tailnet>.ts.net` within 60 seconds, with valid auto-issued cert
 - [ ] On Headscale: identical UX with `HEADSCALE_URL` configured
-- [ ] On Cloudflare Tunnel: dashboard reachable via operator's hostname; identity flows from Cf-Access headers
-- [ ] On LAN-only mDNS: dashboard reachable at `<instance>.local`; admin authenticates via S-149 keypair challenge
+- [ ] On NetBird: dashboard reachable via NetBird MagicDNS within 60s of OIDC sign-in; admin/user1 mapping works against the configured IdP
+- [ ] On ZeroTier: dashboard reachable on ZT IP; admin authenticates via S-149 keypair challenge; non-ZT-member machines cannot connect
+- [ ] On Cloudflare Tunnel: dashboard reachable via operator's hostname; identity flows from CF Access headers when configured
+- [ ] On LAN-mDNS: dashboard reachable at `<instance>.local`; admin authenticates via S-149 keypair challenge
 - [ ] On localhost-only: dashboard reachable on `127.0.0.1`; admin authenticated via Unix socket peer credentials
 - [ ] On manual mode: documented configuration produces a working deployment with operator-supplied reverse-proxy and identity headers
-- [ ] Substrate switch is recoverable: an operator can move from Tailscale to Cloudflare Tunnel (or vice versa) by editing the substrate config; the conductor picks up the change on restart
+- [ ] Substrate switch is recoverable: an operator can move between any pair of substrates by editing the config and restarting; conductor picks up the change
 - [ ] No substrate is required for the conductor to start; localhost-only is always a valid configuration
 
 ## Implementation Notes
 
 - **Tailscale integration:** prefer `tailscaled` as a sidecar (installed via the platform's package manager), controlled via the `tailscale` CLI and LocalAPI socket. Avoids embedding a Go runtime in a polyglot tree. `tsnet` (embedded library) remains an option for single-binary distributions.
-- **Cloudflare Tunnel integration:** ship a Medley plugin `medley install cloudflare-tunnel` that wraps `cloudflared` with our config conventions. Optional for users who already have a Cloudflare account.
-- **Identity header parsing:** the conductor's HTTP middleware reads identity from the configured header list and maps to admin / user1 per the substrate config file. Header trust requires the upstream substrate to actually set them — for manual mode, the operator must lock down the proxy so untrusted clients cannot spoof headers (documented warning in setup).
-- **Peer discovery for federation:** in absence of a mesh substrate (Tailscale / ZeroTier), peer conductors are reached by resolving their `did:web` DID (S-152) which gives a service endpoint URL. The DID's signing key authenticates the channel via mTLS or in-band signed handshake.
+- **Headscale integration:** same as Tailscale; the only difference is the coordination URL. Documented as a one-line config change, not a separate code path.
+- **NetBird integration:** install via NetBird's distribution channels (Debian/RPM packages, Homebrew, MSI). Conductor consumes NetBird's gateway-injected OIDC headers; identity mapping uses standard email/group claims. Self-hosted NetBird Management Service is the open-source path; NetBird Cloud is the managed-service equivalent of Tailscale Inc.'s coordination.
+- **ZeroTier integration:** install ZT One via official packages. ZT is identity-blind — the conductor adds S-149 challenge as the identity layer at the app level. Documented warning: operators using ZT must understand they're getting transport + reachability + peering, not identity.
+- **Cloudflare Tunnel integration:** ship a Medley plugin `medley install cloudflare-tunnel` that wraps `cloudflared` with our config conventions.
+- **Identity header parsing:** the conductor's HTTP middleware reads identity from the configured header list and maps to admin / user1 per the substrate config file. Header trust requires the upstream substrate to actually set them; for manual and ZeroTier modes, operators must lock down the proxy / wrap with a challenge so untrusted clients cannot spoof headers (documented warning in setup).
+- **Peer discovery for federation:** in absence of a mesh substrate, peer conductors are reached by resolving their `did:web` DID (S-152) which gives a service endpoint URL. The DID's signing key authenticates the channel via mTLS or in-band signed handshake.
 - **Localhost-only is the floor.** Even with no substrate configured, the conductor must run, be usable by the local user via CLI / browser to `127.0.0.1`, and refuse all remote connections. Network exposure is opt-in.
 
 ## Verification
 
 - Fresh install with substrate = Tailscale: dashboard accessible from any tailnet device in under 60s; non-tailnet devices cannot connect at all.
 - Fresh install with substrate = Headscale: same, against a self-hosted coordination server.
+- Fresh install with substrate = NetBird: dashboard accessible after OIDC sign-in; admin/user1 mapping resolves against the configured IdP's group claims.
+- Fresh install with substrate = ZeroTier: dashboard accessible at the conductor's ZT IP from another ZT member; admin proves identity by signing a challenge with the S-149 `m/0'` key; non-ZT-member machine cannot reach the conductor.
 - Fresh install with substrate = Cloudflare Tunnel: dashboard accessible via configured hostname; CF Access JWT validated; operator without CF Access bypassed (with explicit admin warning).
 - Fresh install with substrate = LAN-only: `<instance>.local` reachable from same LAN; admin proves identity by signing a challenge with the S-149 `m/0'` key.
 - Fresh install with substrate = localhost-only: dashboard at `127.0.0.1`; remote browsers refused at the socket layer.
-- Substrate switch: change config from Tailscale to Cloudflare Tunnel; restart conductor; dashboard now reachable via the new path; old tailnet path no longer responds.
+- Substrate switch: change config from Tailscale to NetBird; restart conductor; dashboard now reachable via the new path; old tailnet path no longer responds.
+- Pair two conductors on different mesh substrates (one Tailscale, one NetBird): federation works via S-152 DID-based peer discovery + mTLS, since they're not on the same mesh.
