@@ -21,6 +21,7 @@ The conductor needs valid HTTPS for hostnames that don't have a public-CA chain 
 - Internal-mesh hostnames on substrates (S-153) that don't auto-issue Let's Encrypt certs — NetBird's internal `*.netbird.cloud`-style names today, ZeroTier-routed services, LAN-mDNS `*.local` hostnames, and any operator-chosen private hostname.
 - Localhost-only deployments where there's no public DNS to attach a cert to.
 - The window between *now* and the eventual landing of LE DNS-PERSIST-01 production GA + downstream substrate integration (currently expected Q2 2026 + unknown lag).
+- **Operators who don't want to be in the public PKI in the first place.** Some users — the same population that runs their own Bitcoin node and says *"not your keys, not your coins"* — have a strong philosophical preference for sovereign control over their own TLS trust chain. For them, depending on Let's Encrypt + ICANN + CT logs is itself the problem, not the solution.
 
 Browsers and OSes only trust certs that chain to a CA in their system trust store. The shortcuts that are tempting but wrong:
 
@@ -28,11 +29,13 @@ Browsers and OSes only trust certs that chain to a CA in their system trust stor
 - One self-signed cert pinned via TOFU → doesn't work in any vanilla browser.
 - DID-rooted TLS via a draft IETF spec → zero browser support today.
 
-The only working path is: **be your own CA, and get devices to trust your CA root.** Done well, this composes with the rest of the architecture (the seed, the DID, VCs) to make the trust install ceremony itself an artifact of the same security model.
+The only working path is: **be your own CA, and get devices to trust your CA root.** Done well, this composes with the rest of the architecture (the seed, the DID, VCs) to make the trust install ceremony itself an artifact of the same security model — *and* it's a permanent first-class option for operators who never want public PKI in their chain.
 
 ## Solution
 
 The conductor mints an X.509 Certificate Authority deterministically derived from the Conductor Seed (S-149), constrained to the conductor's own hostnames, and ships a slick install ceremony that delivers the CA root to each household device exactly once.
+
+This is **not a stopgap.** It's a permanent capability. Operators who want public-CA-chained TLS get it (today via substrate-provided LE certs; eventually via DNS-PERSIST-01 + substrate integration for internal hostnames). Operators who explicitly *don't* want public PKI in their trust path get it for the lifetime of the project.
 
 ### Key derivation
 
@@ -85,9 +88,57 @@ Leaf properties:
 - **Extended Key Usage:** Server Authentication only
 - Signed in seconds; no external dependency
 
+### TLS modes (operator choice)
+
+The conductor supports three TLS configurations, selectable by the operator and freely switchable:
+
+```toml
+# ~/.conductor/tls.toml
+
+# Mode 1: public-ca (default for households when substrate provides it)
+mode = "public-ca"
+# Conductor serves substrate-provided LE / public-trusted certs.
+# Local CA exists but is unused; trust install ceremony is skipped.
+
+# Mode 2: local-ca (sovereignty mode)
+mode = "local-ca"
+# Conductor serves leaves from its own CA exclusively.
+# Public PKI is never in the trust chain. LE / DNS-PERSIST-01 are bypassed.
+# This is the "not your keys, not your TLS" mode.
+
+# Mode 3: both (parallel chains)
+mode = "both"
+prefer = "public-ca"   # or "local-ca"
+# Conductor serves a leaf chain from whichever is configured as preferred,
+# with the other available as a fallback. Useful during migration in either
+# direction, or for operators who want belt-and-suspenders.
+```
+
+The wizard surfaces this as a deliberate choice during S-139 setup, not a hidden flag:
+
+```
+? TLS for this conductor:
+
+  > Public CA (recommended for most setups)
+      → Substrate provides Let's Encrypt certs automatically (where supported).
+      → Devices trust certs natively, no install required.
+      → Falls back to local CA on substrates without public-cert support.
+
+    Local CA (sovereignty mode)
+      → Conductor is its own certificate authority.
+      → Trust chain never leaves your seed.
+      → Each household device installs the CA root once via QR ceremony.
+      → Recommended if you also run your own Bitcoin node.
+
+    Both (advanced)
+      → Run public and local CAs in parallel. Useful for migration.
+```
+
+Mode is reversible. An operator can switch from `public-ca` to `local-ca` (or vice versa) at any time; existing trust grants are preserved across the switch.
+
 ### Trust install ceremony
 
-During S-139 setup, after the substrate is configured, the wizard generates a one-time install URL:
+During S-139 setup — if mode is `local-ca` or `both` — the wizard generates a one-time install URL:
 
 ```
 ┌─ Trust this Conductor on your devices ──────────────┐
@@ -164,12 +215,12 @@ A verifier resolving the conductor's DID can independently fetch the CA cert and
 
 **v3 (if substrate management plane gains CA distribution):** if NetBird (per [netbirdio/netbird#5479](https://github.com/netbirdio/netbird/issues/5479)) ships management-pushed cert/CA distribution — or if Tailscale, Headscale, etc. add the equivalent — the install ceremony becomes substrate-mediated and the QR step disappears for users on that substrate. Falls back to QR if the substrate doesn't support it.
 
-**v∞ (graceful retirement):** when LE DNS-PERSIST-01 production GA + substrate integration ships across the operator's substrate (NetBird, Tailscale, etc.), the conductor stops issuing leaves from its own CA and serves the public-trusted LE-chained cert for the same hostnames. Already-installed CA roots remain (they trust nothing outside the operator's hostnames; no harm) until the operator removes them via the dashboard. The DID's `tlsTrustAnchor` service entry is updated to reflect the public chain.
+**v∞ (parallel paths, permanent):** when LE DNS-PERSIST-01 production GA + substrate integration ships, the public-CA path becomes available *alongside* the local CA. Operators choose their TLS mode (`public-ca`, `local-ca`, or `both`). **The local CA does not retire.** It remains a permanent first-class option for operators who explicitly want sovereign TLS — the same audience that runs their own Bitcoin node, holds their own seed phrase, and refuses to depend on third-party PKI as a matter of principle. Maistro is the only personal-AI-agent platform that supports this end-to-end, and that's the point.
 
 ### What this spec does NOT do
 
 - **It is not a public CA.** It can only issue certs for the conductor's own hostnames, enforced by X.509 Name Constraints. Devices that install the root cannot be impersonated for any other site.
-- **It does not replace LE for public-facing endpoints.** Public `did:web` documents, public Lightning addresses, etc. still want a chain that terminates in a public CA. This CA is for *internal-trust* hostnames only.
+- **It does not force one TLS mode over another.** Operators choose. The default for a typical household is `public-ca` (least friction); the default for an explicitly sovereignty-minded operator is `local-ca` (no public PKI dependency).
 - **It does not solve cert validation in arbitrary mobile apps.** App developers that don't consume the system trust store (Android API 24+ apps without `network_security_config.xml`, custom-pinned-cert apps) must be addressed by app distribution, not by this spec.
 
 ## Acceptance Criteria
@@ -184,7 +235,9 @@ A verifier resolving the conductor's DID can independently fetch the CA cert and
 - [ ] Trust install is recorded as a Verifiable Credential signed by the conductor's DID; revocable from the dashboard
 - [ ] Name Constraints enforcement verified: a malicious cert signed by the CA for `google.com` is rejected by every modern browser
 - [ ] CA rotation: the conductor can roll the CA (advancing the HKDF salt) and the dashboard guides operators through re-installing on each device; old VC trust grants are revoked
-- [ ] Graceful retirement: when a public-CA chain becomes available for the same hostname, the conductor serves the public chain in preference; devices with the local CA installed continue to work without disruption
+- [ ] **TLS mode is operator-controlled** (`public-ca`, `local-ca`, `both`); switching modes is reversible and preserves existing trust grants
+- [ ] **`local-ca` mode is fully functional even when public-CA paths are available** (no forced retirement of the local CA when LE DNS-PERSIST-01 + substrate integration ships)
+- [ ] **`local-ca` mode operators can verify, via inspection of network traffic, that no LE / public-PKI requests are made by the conductor** (sovereignty mode is observable)
 
 ## Implementation Notes
 
@@ -194,8 +247,9 @@ A verifier resolving the conductor's DID can independently fetch the CA cert and
 - **iOS specifics:** the install profile is a `.mobileconfig` file containing the CA cert. Safari handles installation; the user must manually enable trust afterward. The PWA shows a video or animated demonstration of the trust-enable step — this is the highest-friction part of the install flow and deserves polish.
 - **Android specifics:** the CA installs to the user CA store, which works for Chrome / Firefox / Edge browsers. A future native Maistro Android app must include a `network_security_config.xml` declaring trust for user-installed CAs scoped to the conductor's hostnames — OR ship the CA pinned in the app, OR use Cert Pinning APIs directly.
 - **Substrate-mediated install (v3):** the substrate config (S-153) gains an optional `trust_distribution` block. When set, the conductor delegates CA-root delivery to the substrate's management plane and the QR ceremony is suppressed for devices already enrolled. Today: speculative; activate when an upstream substrate ships the feature.
-- **Composition with the renne workflow:** when NetBird (or any substrate) ships LE-issued certs for internal hostnames, the conductor's HTTP layer serves whichever cert is valid for the requested hostname, preferring the public chain. Devices with the local CA installed see the public cert validate; devices without it also see the public cert validate. The local CA quietly becomes vestigial — still works, no longer needed.
-- **VC revocation:** trust grants are tracked in the audit log as VCs with `validUntil` set. Revocation = issuing a status credential that supersedes the original. CA rotation = mass revocation event; dashboard surfaces the re-trust ceremony for each device.
+- **TLS mode switching:** mode is read at startup and on SIGHUP. Switch from `public-ca` to `local-ca`: conductor stops requesting/serving public certs and serves only local-CA leaves. Switch from `local-ca` to `public-ca`: conductor begins requesting public certs (via substrate or its own ACME client); local-CA leaves remain valid for grace period until public certs arrive. `both` mode serves whichever chain validates for a given client request.
+- **Sovereignty-mode posture:** in `local-ca` mode, the conductor must emit zero outbound requests to Let's Encrypt, ACME directories, OCSP responders, or CT logs as a result of TLS operations. Verifiable by tcpdump. Other outbound traffic (LLM calls, channel APIs) is unaffected; this constraint is about the trust chain, not all network egress.
+- **Marketing copy this enables:** *"Not your keys, not your TLS. Maistro is the only personal-AI agent platform where you can run your own certificate authority for your own agent — anchored to the seed phrase you already wrote down."*
 
 ## Verification
 
@@ -206,4 +260,6 @@ A verifier resolving the conductor's DID can independently fetch the CA cert and
 - Install on Android Chrome; verify validation works in browser; verify a test app without `network_security_config.xml` opting in to user CAs *does not* trust the cert (documented as expected behavior).
 - Issue a trust-install VC for a device; verify the VC appears in the dashboard; revoke it; verify the device is added to a revocation list.
 - Rotate the CA via the dashboard; verify the new CA fingerprint differs; verify devices that had the old CA installed are prompted to re-install via push or board entry.
-- Once a substrate makes a public-CA chain available for the same hostname (test setup), verify the conductor serves the public chain in preference and devices without the local CA still validate cleanly.
+- **Mode switch test:** start in `public-ca`; switch to `local-ca`; verify zero LE / ACME / OCSP / CT-log outbound traffic via tcpdump; verify TLS connections still serve cleanly to devices that have completed the trust install ceremony.
+- **Sovereignty observability:** run the conductor in `local-ca` mode for 24h; capture all outbound network traffic; verify no public-PKI endpoint appears in the destination set.
+- Once a substrate makes a public-CA chain available for the same hostname (test setup), verify the operator can choose to switch (`public-ca`), stay (`local-ca`), or run both (`both`); none of the three options is forced.
