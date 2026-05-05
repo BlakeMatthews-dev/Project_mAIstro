@@ -23,7 +23,7 @@ The conductor needs a public, verifiable identity. Without one:
 - Crypto operations (S-151) lack a counterparty identity. The agent can hold an address but can't prove *which* conductor that address belongs to.
 - Medley plugin authenticity (S-037, S-111) has no cryptographic anchor for "who issued this skill."
 
-The agent needs an identity it controls, that others can resolve, that supports rotation, and that doesn't require a centralized issuer.
+The agent needs an identity it controls, that others can resolve, that supports rotation, and that doesn't require a centralized issuer or any specific networking substrate.
 
 ## Solution
 
@@ -33,11 +33,16 @@ W3C **Decentralized Identifier (DID)** + W3C **Verifiable Credentials (VC)**. Th
 
 Every conductor has at minimum:
 
-- **`did:key`** — derived deterministically from the S-149 path `m/44'/9000'/0'`. The pubkey *is* the identifier. Always available, no infrastructure required.
+- **`did:key`** — derived deterministically from the S-149 path `m/44'/9000'/0'`. The pubkey *is* the identifier. Always available, no infrastructure required, works on a localhost-only deployment.
 
-When a hostname is configured (default true for Tailscale-paired instances per S-153):
+When the conductor has a public-or-tailnet HTTPS endpoint (via any substrate from S-153):
 
-- **`did:web:<instance-name>.<tailnet>.ts.net`** — resolves via `https://.../.well-known/did.json`, served by Tailscale Serve. Supports rotation, service endpoints, and is the practical default for hosted conductors. Tailnet-private by default; published publicly only via explicit `tailscale funnel`.
+- **`did:web:<hostname>`** — resolves via `https://.../.well-known/did.json` served from the conductor's HTTP layer. Supports rotation and service endpoints. The hostname comes from whichever networking substrate the operator chose:
+  - Tailscale: `<instance>.<tailnet>.ts.net`
+  - Headscale: `<instance>.<headscale-host>`
+  - Cloudflare Tunnel: `<operator-domain>`
+  - Manual: whatever the operator's reverse proxy serves
+  - **No HTTPS surface? Just `did:key`.** That is a fully valid identity.
 
 Opt-in via Medley plugins:
 
@@ -50,7 +55,7 @@ All methods point to the *same* underlying keys (derived from S-149); they diffe
 
 ### DID document structure
 
-Served at `https://<instance>.<tailnet>.ts.net/.well-known/did.json`:
+Served at `https://<conductor-hostname>/.well-known/did.json` whenever a substrate provides an HTTPS endpoint:
 
 ```json
 {
@@ -148,14 +153,14 @@ Displayed in the dashboard as part of the conductor's identity card.
 
 - **W3C DID Core 1.0** — the DID and DID document model
 - **W3C VC Data Model 2.0** — the VC structure
-- **JWT-VC** *and* **JSON-LD-VC** formats both supported (JWT-VC for compactness in audit logs; JSON-LD-VC for richer external interop)
+- **JWT-VC** *and* **JSON-LD-VC** formats both supported
 - **BIP-322** for arbitrary message signing (composes with the wallet-signing surface from S-151)
 - **DIDComm v2** for conductor-to-conductor messaging when both parties have DIDs (federation transport in S-115)
 
 ## Acceptance Criteria
 
-- [ ] Every conductor has a `did:key` derivable from S-149 `m/44'/9000'/0'` with no additional configuration
-- [ ] When paired with Tailscale (S-153), conductor publishes `did:web:<instance>.<tailnet>.ts.net/.well-known/did.json` automatically
+- [ ] Every conductor has a `did:key` derivable from S-149 `m/44'/9000'/0'` with no additional configuration; this works even on localhost-only substrates
+- [ ] When the substrate (S-153) provides an HTTPS hostname, conductor publishes `did:web:<hostname>/.well-known/did.json` automatically
 - [ ] DID document includes verification methods for all S-149-derived signing keys in active use
 - [ ] Every privileged operation in the audit log is recorded as a signed VC
 - [ ] Dashboard Intel tab can verify any audit-log VC against the conductor's published DID document
@@ -166,17 +171,20 @@ Displayed in the dashboard as part of the conductor's identity card.
 
 ## Implementation Notes
 
-- **Library suggestions:** `ssi-sdk` (TBD), `didkit` (Spruce), or roll our own minimal implementation — W3C VC is small enough to implement directly in ~500 lines.
+- **Library suggestions:** `didkit` (Spruce), `ssi-sdk`, or roll our own minimal implementation — W3C VC is small enough to implement directly in ~500 lines.
 - **Storage:** DID document is a static file regenerated on key rotation. VCs are first-class rows in the audit log table (sqlite-vec).
-- **Resolution cache:** when verifying VCs from peer conductors, cache resolved DID documents for 24h to limit Tailscale Serve traffic.
-- **`did:web` hosting:** served by Tailscale Serve (S-153) on `/.well-known/did.json`. No separate webserver needed. `tailscale funnel` exposes publicly only when the operator opts in via the dashboard.
-- **Privacy:** DID document publication is **off by default for tailnet-private deployments**. The wizard explicitly asks: *"Publish your conductor's identity to your tailnet? (Recommended for federation.) Publish to the public internet? (Required for some Medley plugins; not required for normal use.)"*
+- **Resolution cache:** when verifying VCs from peer conductors, cache resolved DID documents for 24h to limit substrate traffic.
+- **`did:web` hosting:** served by whatever substrate (S-153) is exposing the conductor's HTTP endpoint. With Tailscale that's `tailscale serve`; with Cloudflare Tunnel that's `cloudflared`; with manual mode that's the operator's reverse proxy. The conductor itself just serves `/.well-known/did.json` from its HTTP layer.
+- **Privacy:** DID document publication is **off by default for tailnet-private and localhost-only deployments**. The wizard explicitly asks: *"Publish your conductor's identity? (Recommended for federation. Required for some Medley plugins. Not required for normal use.)"* For Tailscale, this means choosing whether `tailscale funnel` exposes `/.well-known/did.json` to the public internet. For other substrates, equivalent decisions.
+- **Localhost-only deployments:** always have a working `did:key`. Federation and external VC verification are simply unavailable until a public-or-tailnet substrate is configured.
 
 ## Verification
 
-- `curl https://brigid.example.ts.net/.well-known/did.json` returns a valid DID document.
-- Run a privileged operation (e.g., a skill execution); the audit log entry is a signed VC.
+- On a localhost-only deploy: `did:key` is derivable and signs audit-log VCs.
+- On a Tailscale deploy: `curl https://brigid.example.ts.net/.well-known/did.json` returns a valid DID document.
+- Run a privileged operation; the audit log entry is a signed VC.
 - Verify the VC offline using the published DID document; signature is valid.
 - Pair two conductors on the same tailnet; admin issues a trust VC from one to the other; federated contributions from the second appear in the first's Intel tab marked "verified."
 - Install an unsigned Medley plugin; install is blocked pending admin override.
 - Rotate the `m/0'` key; old audit-log VCs still verify against the historical DID document; new operations sign with the new key.
+- Switch substrate from Tailscale to Cloudflare Tunnel: DID document re-publishes at the new hostname; old `did:web:<old-host>` reads from `did.json.history/` for backward verification of past VCs.
