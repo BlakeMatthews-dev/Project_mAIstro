@@ -1,225 +1,140 @@
 # Project mAIstro
 
+**Conductor orchestrates your agent swarm — no matter the shape.**
+
+Wraps any agent in our security and permissions boundaries. Lets AutoGen call Claude Code. Lets Claude Code call Anthropic ADK. Lets your custom agent call Jenny in HR over Teams. Get the work done, no matter who or what needs to do it. *One node could be "send a Teams message asking a question and return the answer to the next node."* Same envelope. Same audit log. Same provenance — whether the responder is a model, a framework, another conductor, or a person.
+
+Over time, the Conductor learns how to ask Jenny better — concise where she likes concise, with context where she needs it, in the channel and at the time she actually responds. Same hyperagent optimization that tunes prompts for models, applied to the humans in your graph.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
+[![Specs: Driven](https://img.shields.io/badge/Specs-Driven-success?style=for-the-badge)](specs/TIMELINE.md)
+[![Status: in design](https://img.shields.io/badge/Status-in%20design-orange?style=for-the-badge)](specs/TIMELINE.md)
+
+---
+
+## Two products, one runtime
+
+```
+project_mAIstro                          (the studio / repo)
+  ├─ Agent Conductor                       household / personal scale
+  │     2–N users (admin + 1..N)
+  │     single-machine or small cluster
+  │     crypto / federation opt-in
+  │     SQLite + sqlite-vec, age-encrypted vault
+  │     pluggable mesh substrate (Tailscale, Headscale, NetBird, ZeroTier, ...)
+  │
+  └─ Agent Stronghold                      multitenant platform
+        many tenants × many users each
+        clustered / cloud deploy
+        Keycloak + Vaultwarden + Postgres
+```
+
+One **Hyperagent Graph Runtime** ([S-145](specs/conductor/S-145-hyperagent-graph-runtime.md)) underneath both. Same Bouncer ([S-022](specs/security/S-022-bouncer.md)), same capability envelope, same audit log, same Conductor Seed root of trust ([S-149](specs/security/S-149-conductor-seed.md)).
+
+---
+
+## Why this exists
+
 > **Windows doesn't run apps as Administrator. Linux requires sudo. Why does your AI agent default to root?**
 >
 > Agent Conductor is secure by design — human-in-the-loop for critical actions, separation of privilege by default. You don't give your handyman your banking login or the keys to your safe. So why give them to your AI?
 >
 > Your conductor stores credentials in a sealed vault. It can't leak what it doesn't know.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
-[![Specs](https://img.shields.io/badge/Spec--driven-yes-7c3aed?style=for-the-badge)](specs/TIMELINE.md)
-[![Philosophy](https://img.shields.io/badge/Philosophy-PHILOSOPHY.md-2563eb?style=for-the-badge)](specs/security/PHILOSOPHY.md)
-[![Threat Model](https://img.shields.io/badge/Threat%20Model-ARCHITECTURE.md-dc2626?style=for-the-badge)](specs/security/ARCHITECTURE.md)
+Full rationale: [`specs/security/PHILOSOPHY.md`](specs/security/PHILOSOPHY.md). Architecture white paper: [`specs/security/ARCHITECTURE.md`](specs/security/ARCHITECTURE.md).
 
 ---
 
-## Two products, one studio
+## What you get
+
+### Universal node contract (Shape A)
+
+Anything that takes a prompt and emits a response can be wrapped as a node in the graph: another Maistro Conductor, OpenClaw, Claude Code, Anthropic ADK, AutoGen / Microsoft Agent Framework, a Claude SDK project, a LangGraph chain, your custom agent, **a human on Teams / Slack / email / SMS / their own conductor / the conductor app**. Each wrapped node runs inside our Bouncer + capability envelope + audit log.
+
+See [S-145 §5](specs/conductor/S-145-hyperagent-graph-runtime.md) (the universal adapter contract) and [S-158](specs/conductor/S-158-human-as-node.md) (humans-as-nodes specifically).
+
+### Compatibility today, agent-wrapping forthcoming
+
+- **Skills (`SKILL.md`)** — work today. Skills authored for Claude Code or OpenClaw run in Maistro and vice versa.
+- **Plugins** — Medley ([S-037](specs/tools/S-037-clawhub.md)) is the universal plugin marketplace covering skills, channels, agents, and subgraphs.
+- **Agent wrapping** — the architecture spec ([S-145](specs/conductor/S-145-hyperagent-graph-runtime.md)) defines the contract; first-party adapters for Claude Code, ADK, AutoGen, OpenClaw, and human-on-channel are forthcoming Medley plugins.
+
+### Privilege separation by default ([S-142](specs/security/S-142-privilege-separation.md))
+
+Mandatory two-tier model. The setup wizard ([S-139](specs/infra/S-139-setup-wizard.md)) is structurally incapable of completing with fewer than two users (admin + at least one named user). No flag, no environment variable, no shortcut. Privileged operations route through admin via wallet-app signing.
+
+### Sovereign by default
+
+- BIP39/BIP32 Conductor Seed as the root of trust ([S-149](specs/security/S-149-conductor-seed.md)). The same seed phrase recovers your identity, your audit-log signing key, your TLS CA, and (optionally) your Lightning wallet.
+- age-encrypted vault unlocked by your admin keypair ([S-141](specs/security/S-141-vault.md)). The agent never holds credential *values* in its variable scope — the vault is a broker, not a key/value store.
+- Bring-your-own networking substrate ([S-153](specs/infra/S-153-tailscale-native.md)): Tailscale recommended; Headscale / NetBird / ZeroTier / Cloudflare Tunnel / LAN-mDNS / localhost-only / manual all first-class.
+- Bring-your-own TLS root ([S-155](specs/security/S-155-internal-trust-root.md)). Run your own household CA; Let's Encrypt is optional, not required. *Not your keys, not your TLS.*
+
+### Crypto-optional
+
+Wallet, Lightning, federation, Bitcoin chain backend — all opt-in via Medley. A conductor with no crypto plugins runs fully and is fully secure ([S-151](specs/security/S-151-agent-crypto-ops.md)). For operators who want it: Lightning federation between conductor friends ([S-156](specs/security/S-156-lightning-federation.md)) makes spam-resistance economic, paid messaging native, and reputation a function of the payment graph itself.
+
+### Self-improving graph
+
+The runtime tunes itself within bounded subsystems ([S-145 §4](specs/conductor/S-145-hyperagent-graph-runtime.md)):
+
+- Red/Blue ([S-026](specs/intelligence/S-026-adversarial-hardening.md)) grows the Bouncer's pattern library.
+- Tournament Arena ([S-027](specs/intelligence/S-027-tournament-arena.md)) scores recipe variants — *and per-human prompt variants*. Over time, the conductor talks to Jenny in *her* most-effective framing, opt-in.
+- Skill Forge ([S-038](specs/tools/S-038-skill-forge.md)) writes new skills; Phantom ([S-030](specs/intelligence/S-030-phantom-execution.md)) sandbox-tests them; Skill Evolution ([S-112](specs/tools/S-112-skill-evolution.md)) prunes weak ones.
+
+All graph mutations are admin-signed and produce VCs in the audit log ([S-152](specs/security/S-152-agent-identity-did-vc.md)).
+
+### Browser-first install
 
 ```
-project_mAIstro                          (the studio / repo)
-  ├─ Agent Conductor                       household / personal scale
-  │     2–N users (admin + 1..N)           single-machine or small cluster
-  │     crypto / federation opt-in          spec: S-138
-  │
-  └─ Agent Stronghold                      multitenant platform
-        many tenants × many users           clustered / cloud deploy
-```
-
-**Agent Conductor** is the headline product — a household-scale AI agent platform with privilege separation, sealed credentials, and self-hosted everything. **Agent Stronghold** is the multitenant SKU that runs the same runtime at scale.
-
-This README focuses on Agent Conductor. The complete spec tree is in [`specs/`](specs/); the master timeline is [`specs/TIMELINE.md`](specs/TIMELINE.md); the threat model and security architecture is [`specs/security/ARCHITECTURE.md`](specs/security/ARCHITECTURE.md).
-
----
-
-## What Agent Conductor is
-
-A self-improving hyperagent graph runtime that orchestrates a swarm of importable, modifiable agents. Your conductor:
-
-- Routes prompts through a typed capability envelope — conversation-only intents get zero tools, ever ([S-145](specs/conductor/S-145-hyperagent-graph-runtime.md))
-- Stores credentials in an age-encrypted vault unlocked by your seed phrase — the agent never sees secret values, only requests their use ([S-141](specs/security/S-141-vault.md))
-- Requires admin + at least one user, mandatory at install time. Single-user-as-root is structurally impossible ([S-142](specs/security/S-142-privilege-separation.md))
-- Runs everything through a Bouncer (regex + LLM negative pass) before any tool invocation ([S-022](specs/security/S-022-bouncer.md))
-- Has continuous Red/Blue self-hardening; new attack patterns feed back into the Bouncer ([S-026](specs/intelligence/S-026-adversarial-hardening.md))
-- Records every privileged action as a Verifiable Credential signed by your DID ([S-152](specs/security/S-152-agent-identity-did-vc.md))
-- Federates with other conductors over Tailscale / NetBird / Cloudflare Tunnel / your-own-substrate, optionally with Lightning-paid spam resistance ([S-153](specs/infra/S-153-tailscale-native.md), [S-156](specs/security/S-156-lightning-federation.md))
-
-The positioning frame: **OpenClaw is one agent. Agent Conductor orchestrates a graph of them — including OpenClaw as a node, if you want.** Full comparison with citations: [`specs/security/ARCHITECTURE.md`](specs/security/ARCHITECTURE.md) §5.
-
----
-
-## Five-minute install
-
-### Linux / macOS
-
-```bash
+# Linux / macOS
 curl -fsSL maistro.dev/install.sh | sh
+
+# Windows
+Double-click the signed maistro-setup.msi
+
+→ conductor binary installs as a service
+→ spawns localhost:9999 wizard
+→ opens browser
+→ wizard walks you through seed, admin, users, network, TLS, LLM, channels, optional crypto
+→ ~5 minutes to a working conductor
 ```
 
-Verifies signature, installs the conductor as a `systemd` unit (Linux) or `launchd` plist (macOS), opens the browser at `http://127.0.0.1:9999/setup`, and runs the wizard.
-
-macOS users who prefer a GUI install: download the signed `.pkg` from `maistro.dev/download`. Same outcome.
-
-### Windows
-
-Download `maistro-setup.msi` from `maistro.dev/download`. Authenticode-signed; SmartScreen recognizes it. Double-click to install; conductor runs as a low-privilege Windows Service; default browser opens to the wizard.
-
-### Wizard flow (12 steps in your browser)
-
-1. Name your conductor.
-2. Generate Conductor Seed (BIP39 24 words, with optional SLIP39 Shamir or hardware wallet).
-3. Create admin (keypair derived from seed; recovery card printed).
-4. **Create user one (required — wizard does not advance without this).**
-5. Anyone else in your household? (add 0..N more users).
-6. Network substrate: Tailscale (recommended) / Headscale / NetBird / ZeroTier / Cloudflare Tunnel / LAN / localhost / manual.
-7. TLS mode: Public CA / Local CA (sovereignty mode) / both.
-8. LLM providers: OAuth-first sign-in to Groq + OpenRouter, paste-API for Cerebras + Cloudflare AI; or BYO local model.
-9. Channels: Telegram / voice / email / Obsidian (optional).
-10. Crypto features: skip (default) / Lightning / Bitcoin+Lightning / BYO node.
-11. Live smoke tests confirm Bouncer rejects injection, vault is brokered, capability envelope works, audit log signs the install ceremony itself.
-12. Open the Console.
-
-Details: [`specs/infra/S-139-setup-wizard.md`](specs/infra/S-139-setup-wizard.md).
-
-Headless install? `curl install.sh | sh -s -- --cli` runs the same wizard in your terminal.
+Full flow: [S-139](specs/infra/S-139-setup-wizard.md). CLI fallback for headless deploys; signed `.msi` for Windows; signed `.pkg` for macOS users who prefer GUI install.
 
 ---
 
-## Architecture overview
+## Spec-driven
 
-```
-   inbound (untrusted)                       outbound (privileged)
-   ──────────────────                       ────────────────────
-        chat / voice                          shell / file / API
-        email / web                                  ↑
-              ↓                                      │
-      [substrate identity] (S-153)                   │
-              ↓                                      │
-         [Bouncer] (S-022) — regex + LLM screen ────│
-              ↓                                      │
-     [Intent Classifier] (S-007) → typed AgentSpec   │
-              ↓                                      │
-      [Spawner] (S-002) — capability whitelist       │
-              ↓                                      │
-         [Agent Loop] ─ vault.use ─ medley plugin ───┘
-              ↓                                      
-     [Langfuse trace] + [audit-log VC] + [git-tracked memory write]
-```
+Every claim in this README is a spec in [`specs/`](specs/) with acceptance criteria, file pointers, and verification steps. The master timeline is [`specs/TIMELINE.md`](specs/TIMELINE.md).
 
-Full architecture, threat model, and OpenClaw comparison: [`specs/security/ARCHITECTURE.md`](specs/security/ARCHITECTURE.md).
+Security comparison vs OpenClaw: [`specs/security/ARCHITECTURE.md`](specs/security/ARCHITECTURE.md) §5.
+
+The spec tree is the single source of truth. Old `CONDUCTOR-ROADMAP.md` and `BACKLOG.md` are deprecated and kept for historical reference only.
 
 ---
 
-## Sovereignty mode
+## Quick links
 
-The whole stack is opt-out. Pick localhost-only substrate, local-CA TLS, BYO local LLM, no crypto, no channels — the wizard supports it; the smoke tests still pass; the conductor runs with **zero outbound traffic** verifiable via `tcpdump`.
-
-For crypto-native users:
-
-- Your Conductor Seed *is* a BIP39 phrase. Same words back up the agent's identity, your wallets, and (optionally) your federation keys ([S-149](specs/security/S-149-conductor-seed.md)).
-- Bring your own Lightning node, or run `medley install lightning` to get one bundled with LDK.
-- Optional: `medley install electrum-server` makes your conductor your household's private Bitcoin backend ([S-154](specs/tools/S-154-electrum-server.md)).
-- Federate with other conductors over Lightning with payment-graph reputation ([S-156](specs/security/S-156-lightning-federation.md)).
-- Run your own CA from the same seed; nothing in the trust chain leaves your control ([S-155](specs/security/S-155-internal-trust-root.md)).
-
----
-
-## Medley — the plugin marketplace
-
-```
-medley install ha-ai telegram gmail builders-graph
-```
-
-Medley is the unified plugin format for skills, channels, agents, and multi-agent subgraphs. Plugins ship with publisher Verifiable Credentials signed by the publisher's DID; install-time verification gates trust promotion.
-
-- Skills (single executable capabilities) — [S-035](specs/tools/S-035-skills-subsystem.md)
-- Channels (input/output adapters: Telegram, Slack, Discord, Matrix, Signal, etc.)
-- Agents (importable agent nodes; Claude SDK / LangGraph / OpenClaw / etc.)
-- Graphs (multi-agent subgraphs imported as a unit)
-
-Spec: [S-037 Medley basics](specs/tools/S-037-clawhub.md), [S-111 Medley full (publish, versions, signed VCs)](specs/tools/S-111-clawhub-full.md).
-
-Every plugin runs inside the same Bouncer / capability envelope / Phantom-Execution-sandbox machinery as native agents. **OpenClaw runs as a node inside Maistro this way** — wrapped in an `ImportedAgent` adapter, with the same security gates as everything else.
+- [**Philosophy**](specs/security/PHILOSOPHY.md) — the why
+- [**Architecture white paper**](specs/security/ARCHITECTURE.md) — layer-by-layer + OpenClaw comparison
+- [**Hyperagent Graph Runtime**](specs/conductor/S-145-hyperagent-graph-runtime.md) — the meta-spec
+- [**Agent Conductor product definition**](specs/conductor/S-138-agent-conductor.md) — the household SKU
+- [**Setup wizard**](specs/infra/S-139-setup-wizard.md) — the install ceremony
+- [**Node + Graph Designer**](specs/infra/S-159-node-graph-designer.md) — the visual composer
+- [**Human-as-node**](specs/conductor/S-158-human-as-node.md) — Jenny in HR is a first-class node
+- [**Lightning federation**](specs/security/S-156-lightning-federation.md) — paid messaging between conductor friends (opt-in)
+- [**TIMELINE**](specs/TIMELINE.md) — the master chronology
 
 ---
 
-## Quick links to the spec tree
+## Status
 
-| Topic | Spec |
-|---|---|
-| **Why this design** | [`specs/security/PHILOSOPHY.md`](specs/security/PHILOSOPHY.md) |
-| Threat model + OpenClaw comparison | [`specs/security/ARCHITECTURE.md`](specs/security/ARCHITECTURE.md) |
-| Master timeline | [`specs/TIMELINE.md`](specs/TIMELINE.md) |
-| Hyperagent graph runtime | [S-145](specs/conductor/S-145-hyperagent-graph-runtime.md) |
-| Agent Conductor product | [S-138](specs/conductor/S-138-agent-conductor.md) |
-| Setup wizard | [S-139](specs/infra/S-139-setup-wizard.md) |
-| Vault (sealed credentials) | [S-141](specs/security/S-141-vault.md) |
-| Privilege separation | [S-142](specs/security/S-142-privilege-separation.md) |
-| 1kHz reactor loop | [S-143](specs/conductor/S-143-1khz-reactor.md) |
-| LLM provider auto-config | [S-144](specs/infra/S-144-litellm-freetier.md) |
-| Native install (.msi / launchd / systemd) | [S-147](specs/infra/S-147-native-install.md) |
-| Optional Podman containerization | [S-148](specs/infra/S-148-podman-container.md) |
-| Conductor Seed (BIP39 + BIP32 HD) | [S-149](specs/security/S-149-conductor-seed.md) |
-| Hardware signing devices | [S-150](specs/security/S-150-hardware-signing.md) |
-| Crypto operations + Lightning | [S-151](specs/security/S-151-agent-crypto-ops.md) |
-| DID + Verifiable Credentials | [S-152](specs/security/S-152-agent-identity-did-vc.md) |
-| Networking substrate (Tailscale / NetBird / etc.) | [S-153](specs/infra/S-153-tailscale-native.md) |
-| Electrum server plugin | [S-154](specs/tools/S-154-electrum-server.md) |
-| Internal CA + sovereignty mode | [S-155](specs/security/S-155-internal-trust-root.md) |
-| Lightning-native federation | [S-156](specs/security/S-156-lightning-federation.md) |
+In design. The spec tree is the deliverable today; implementation is being staged spec-by-spec via the methodology in `CONTRIBUTING.md`: **specs → Gherkin scenarios → contracts → tests → implementation → mobile**.
+
+No running gateway / no installable binary yet. If you're here to evaluate the architecture, start with `specs/security/ARCHITECTURE.md` and `specs/security/PHILOSOPHY.md`.
 
 ---
-
-## CLI companion
-
-```bash
-maistro setup                       # Re-run / reconfigure the wizard (admin-signed for reset)
-maistro vault add <name>            # Add a credential to the sealed vault
-maistro identity show               # Show this conductor's DID
-maistro federate <peer-did>         # Open a friend handshake with another conductor
-medley install <name>...            # Install plugins
-medley info <name>                  # Inspect a plugin's publisher + trust tier
-maistro update                      # Atomic signed update
-```
-
----
-
-## Stronghold (the multitenant SKU)
-
-Agent Stronghold runs the same hyperagent runtime with multitenant primitives swapped in: Postgres for state, Vaultwarden for secrets, Keycloak + oauth2-proxy for the perimeter, Traefik for routing. An operator who outgrows Conductor migrates by reconfiguring the substrate, vault, and state layers — the runtime, the audit log, and the Conductor Seed all transfer.
-
-Documentation for Agent Stronghold lives in a separate spec set (forthcoming).
-
----
-
-## Project structure
-
-```
-project_maistro/
-├── specs/                    # Source of truth: every claim has a spec
-│   ├── TIMELINE.md           # Master timeline of all specs
-│   ├── SPEC-TEMPLATE.md      # Template for new specs
-│   ├── conductor/            # Orchestrator-side specs
-│   ├── infra/                # Substrate, networking, install, storage
-│   ├── security/             # Identity, vault, philosophy, threat model
-│   ├── intelligence/         # Memory, dreams, red team, tournament
-│   ├── tools/                # Medley, skills, plugins
-│   └── channels/             # Telegram / voice / email / etc.
-├── src/                      # TypeScript gateway + dashboard
-├── conductor/                # Python orchestrator
-├── packages/                 # Workspace packages
-├── extensions/               # First-party Medley plugins
-├── skills/                   # First-party SKILL.md bundles
-├── Dockerfile                # Container image
-└── docker-compose.yml        # Reference compose for development
-```
-
----
-
-## Contributing
-
-Every feature has a spec. Workflow: spec → Gherkin scenarios → contracts → tests → implementation. See [`specs/SPEC-TEMPLATE.md`](specs/SPEC-TEMPLATE.md) for the spec format. New features without a spec will be asked to add one before review.
-
-Security disclosure: see [`SECURITY.md`](SECURITY.md).
 
 ## License
 
