@@ -197,7 +197,7 @@ None of these are deletions — they're substrate-conditional defaults:
 |---|---|---|
 | S-101 (Traefik dashboard route) | Not needed | Used as documented (or replaced by the substrate's TLS layer) |
 | S-017 (Dashboard auth) | Substrate identity replaces oauth2-proxy + Keycloak | oauth2-proxy + Keycloak still applies (or substrate-specific equivalent) |
-| S-018, S-019, S-024 | Stronghold-only as default | Lite mode falls back to substrate-native identity or S-149 challenge |
+| S-018, S-019, S-024 | Replaced by substrate identity; not invoked | Required when substrate is identity-blind; **Agent Stronghold** uses the full Keycloak stack, **Agent Conductor** uses S-149 keypair challenge |
 | S-115 (Agent-to-agent networking) | Default transport: substrate mesh | Default transport: DID-based discovery + mTLS (S-152 keypair) |
 | S-114 (Collective Unconscious) | Trust handshake over mesh, paired with VCs from S-152 | Same handshake, transport over the configured tunnel/manual substrate |
 | S-152 (DID + VC) | `did:web` hosted automatically by the substrate's HTTPS layer | `did:web` hosted by tunnel / operator's proxy, or `did:key`-only if no public surface |
