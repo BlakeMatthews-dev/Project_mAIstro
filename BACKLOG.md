@@ -1,5 +1,9 @@
 # Project mAIstro — Backlog
 
+> **Deprecated** — this file is no longer the source of truth.
+> Active sprint and planned features live in [`specs/`](specs/) and the master timeline is [`specs/TIMELINE.md`](specs/TIMELINE.md).
+> This file is kept for historical reference; do not update it.
+
 **Last Updated:** 2026-03-23
 
 ## Priority Legend

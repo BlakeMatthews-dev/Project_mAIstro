@@ -1,404 +1,138 @@
-# Project Maistro
+# Project mAIstro
 
-**Your AI assistant, everywhere you already are.**
+**Conductor orchestrates your agent swarm — no matter the shape.**
 
-A self-hosted, multi-channel AI gateway that connects large language models to 40+ messaging platforms — Slack, Discord, Telegram, WhatsApp, Signal, Matrix, Teams, and more. One brain, every conversation.
+Wraps any agent in our security and permissions boundaries. Lets AutoGen call Claude Code. Lets Claude Code call Anthropic ADK. Lets your custom agent call Jenny in HR over Teams. Get the work done, no matter who or what needs to do it. *One node could be "send a Teams message asking a question and return the answer to the next node."* Same envelope. Same audit log. Same provenance — whether the responder is a model, a framework, another conductor, or a person.
+
+Over time, the Conductor learns how to ask Jenny better — concise where she likes concise, with context where she needs it, in the channel and at the time she actually responds. Same hyperagent optimization that tunes prompts for models, applied to the humans in your graph.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](Dockerfile)
+[![Specs: Driven](https://img.shields.io/badge/Specs-Driven-success?style=for-the-badge)](specs/TIMELINE.md)
+[![Status: in design](https://img.shields.io/badge/Status-in%20design-orange?style=for-the-badge)](specs/TIMELINE.md)
 
 ---
 
-## What Is Maistro?
-
-Maistro is an AI orchestration platform — not just a chatbot wrapper. It runs a **multi-agent conductor ensemble** (Planner, Coder, Reviewer, Scout) with an **Ultra Think** parallel generation pipeline that produces higher-quality outputs through iterative refinement. Connect any supported LLM provider, deliver through any messaging channel, keep everything on your own infrastructure.
-
-### Key Capabilities
-
-|                   | Feature                    | Details                                                                                                                              |
-| ----------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **Channels**      | 40+ messaging integrations | Slack, Discord, Telegram, WhatsApp, Signal, Matrix, Teams, IRC, iMessage, Google Chat, Line, Mattermost, Nostr, SMS, email, and more |
-| **LLM Providers** | 9+ providers               | Anthropic Claude, Google Gemini, Ollama (local), OpenRouter, GitHub Copilot, Qwen, Minimax, OpenAI, and custom endpoints             |
-| **Skills**        | 54 built-in skills         | GitHub, Trello, Notion, Spotify, weather, camera, file management, coding agents, and more                                           |
-| **Compatibility** | Claude Code & OpenClaw     | Skills and plugins work across Maistro, Claude Code, and OpenClaw — drop-in compatible                                               |
-| **Browser**       | Playwright automation      | Full browser control with Chrome extension relay for DevTools Protocol                                                               |
-| **Voice**         | Multi-provider TTS/STT     | ElevenLabs, Google, OpenAI, Azure, and local Sherpa ONNX                                                                             |
-| **Memory**        | Persistent context         | Vector embeddings, semantic search, knowledge graph, temporal decay                                                                  |
-| **Security**      | Hardened by default        | Sandbox env sanitization, trust boundaries, CSPRNG tokens, IDN homoglyph protection                                                  |
-
----
-
-## Architecture
+## Two products, one runtime
 
 ```
-                          ┌─────────────────────────────────────────┐
-                          │            Gateway (WS :18789)          │
-                          │  Auth · Rate Limiting · Session Mgmt   │
-                          └──────┬──────────────┬──────────────┬───┘
-                                 │              │              │
-                    ┌────────────┘     ┌────────┘     ┌────────┘
-                    ▼                  ▼              ▼
-             ┌─────────────┐   ┌────────────┐  ┌───────────┐
-             │  Conductor   │   │  Channels  │  │   Tools   │
-             │  Ensemble    │   │  (40+)     │  │           │
-             └──┬──┬──┬──┬─┘   └────────────┘  └───────────┘
-                │  │  │  │
-         ┌──────┘  │  │  └──────┐
-         ▼         ▼  ▼         ▼
-     Planner   Coder  Reviewer  Scout
+project_mAIstro                          (the studio / repo)
+  ├─ Agent Conductor                       household / personal scale
+  │     2–N users (admin + 1..N)
+  │     single-machine or small cluster
+  │     crypto / federation opt-in
+  │     SQLite + sqlite-vec, age-encrypted vault
+  │     pluggable mesh substrate (Tailscale, Headscale, NetBird, ZeroTier, ...)
+  │
+  └─ Agent Stronghold                      multitenant platform
+        many tenants × many users each
+        clustered / cloud deploy
+        Keycloak + Vaultwarden + Postgres
 ```
 
-**Conductor Ensemble** — Multi-agent system with 4 compute tiers:
-
-- **Tier 1**: Single generation, low temperature — fast answers
-- **Tier 2**: 3 parallel generations with review — balanced quality
-- **Tier 3**: 5 generations + testing + review with thinking mode — high reliability
-- **Tier 4**: 10 generations + full test suite + convergence analysis — maximum quality
-
-**5-Layer Memory Stack**:
-
-1. **Constraints** — Style, architecture, and security rules
-2. **Working Memory** — Active conversation history
-3. **Compressed** — Summarized older turns
-4. **Changelog** — Task history with success metrics
-5. **Knowledge Graph** — Module and function dependency map
+One **Hyperagent Graph Runtime** ([S-145](specs/conductor/S-145-hyperagent-graph-runtime.md)) underneath both. Same Bouncer ([S-022](specs/security/S-022-bouncer.md)), same capability envelope, same audit log, same Conductor Seed root of trust ([S-149](specs/security/S-149-conductor-seed.md)).
 
 ---
 
-## Quick Start
+## Why this exists
 
-### Docker (recommended)
+> **Windows doesn't run apps as Administrator. Linux requires sudo. Why does your AI agent default to root?**
+>
+> Agent Conductor is secure by design — human-in-the-loop for critical actions, separation of privilege by default. You don't give your handyman your banking login or the keys to your safe. So why give them to your AI?
+>
+> Your conductor stores credentials in a sealed vault. It can't leak what it doesn't know.
 
-```bash
-# Clone and start
-git clone https://github.com/TheAIGuyFromAR/Project_mAIstro.git
-cd Project_mAIstro
-cp .env.example .env
-# Edit .env with your API keys and gateway token
-
-docker compose up -d
-```
-
-### Local Development
-
-```bash
-# Requirements: Node.js >= 22, pnpm
-npm install
-node maistro.mjs gateway
-```
-
-### Environment Setup
-
-```bash
-# Required: at least one LLM provider
-ANTHROPIC_API_KEY=sk-ant-...        # Anthropic Claude
-GEMINI_API_KEY=...                   # Google Gemini
-OPENROUTER_API_KEY=...               # OpenRouter (multi-model)
-OLLAMA_HOST=http://localhost:11434   # Ollama (local models)
-
-# Required: gateway authentication
-MAISTRO_GATEWAY_TOKEN=<64+ hex chars>
-
-# Optional: channel tokens (enable as needed)
-TELEGRAM_BOT_TOKEN=...
-DISCORD_BOT_TOKEN=...
-SLACK_BOT_TOKEN=...
-SLACK_APP_TOKEN=...
-```
+Full rationale: [`specs/security/PHILOSOPHY.md`](specs/security/PHILOSOPHY.md). Architecture white paper: [`specs/security/ARCHITECTURE.md`](specs/security/ARCHITECTURE.md).
 
 ---
 
-## Supported Channels
+## What you get
 
-| Category             | Channels                                                    |
-| -------------------- | ----------------------------------------------------------- |
-| **Chat Platforms**   | Slack, Discord, Telegram, WhatsApp, Google Chat, Mattermost |
-| **Secure Messaging** | Signal, Matrix, iMessage (via BlueBubbles)                  |
-| **Enterprise**       | Microsoft Teams, Nextcloud Talk                             |
-| **Protocol**         | IRC, Nostr, WebChat                                         |
-| **Asian Markets**    | LINE, Zalo, Feishu/Lark                                     |
-| **Voice/SMS**        | Twilio, ElevenLabs, Sherpa ONNX                             |
-| **Apple**            | iMessage, BlueBubbles                                       |
+### Universal node contract (Shape A)
 
-Each channel is a plugin with a standardized adapter interface — config, security, outbound delivery, threading, streaming, and more.
+Anything that takes a prompt and emits a response can be wrapped as a node in the graph: another Maistro Conductor, OpenClaw, Claude Code, Anthropic ADK, AutoGen / Microsoft Agent Framework, a Claude SDK project, a LangGraph chain, your custom agent, **a human on Teams / Slack / email / SMS / their own conductor / the conductor app**. Each wrapped node runs inside our Bouncer + capability envelope + audit log.
 
----
+See [S-145 §5](specs/conductor/S-145-hyperagent-graph-runtime.md) (the universal adapter contract) and [S-158](specs/conductor/S-158-human-as-node.md) (humans-as-nodes specifically).
 
-## Claude Code & OpenClaw Compatibility
+### Compatibility today, agent-wrapping forthcoming
 
-Maistro is **drop-in compatible** with both Claude Code and OpenClaw ecosystems:
+- **Skills (`SKILL.md`)** — work today. Skills authored for Claude Code or OpenClaw run in Maistro and vice versa.
+- **Plugins** — Medley ([S-037](specs/tools/S-037-clawhub.md)) is the universal plugin marketplace covering skills, channels, agents, and subgraphs.
+- **Agent wrapping** — the architecture spec ([S-145](specs/conductor/S-145-hyperagent-graph-runtime.md)) defines the contract; first-party adapters for Claude Code, ADK, AutoGen, OpenClaw, and human-on-channel are forthcoming Medley plugins.
 
-### Skills
+### Privilege separation by default ([S-142](specs/security/S-142-privilege-separation.md))
 
-Skills use the same `SKILL.md` format with YAML frontmatter. Place them in any of these directories:
+Mandatory two-tier model. The setup wizard ([S-139](specs/infra/S-139-setup-wizard.md)) is structurally incapable of completing with fewer than two users (admin + at least one named user). No flag, no environment variable, no shortcut. Privileged operations route through admin via wallet-app signing.
 
-```
-~/.agents/skills/              # Personal skills (shared with Claude Code)
-<workspace>/.agents/skills/    # Project-specific skills
-<workspace>/skills/            # Workspace skills
-~/.config/maistro/skills/      # Managed/installed skills
-```
+### Sovereign by default
 
-A skill is a Markdown file that defines a slash command:
+- BIP39/BIP32 Conductor Seed as the root of trust ([S-149](specs/security/S-149-conductor-seed.md)). The same seed phrase recovers your identity, your audit-log signing key, your TLS CA, and (optionally) your Lightning wallet.
+- age-encrypted vault unlocked by your admin keypair ([S-141](specs/security/S-141-vault.md)). The agent never holds credential *values* in its variable scope — the vault is a broker, not a key/value store.
+- Bring-your-own networking substrate ([S-153](specs/infra/S-153-tailscale-native.md)): Tailscale recommended; Headscale / NetBird / ZeroTier / Cloudflare Tunnel / LAN-mDNS / localhost-only / manual all first-class.
+- Bring-your-own TLS root ([S-155](specs/security/S-155-internal-trust-root.md)). Run your own household CA; Let's Encrypt is optional, not required. *Not your keys, not your TLS.*
 
-```markdown
----
-name: my-skill
-description: "Does something useful"
-metadata: { "maistro": { "emoji": "🔧", "requires": { "bins": ["jq"] } } }
----
+### Crypto-optional
 
-Your skill prompt goes here. The agent receives this as instructions
-when the user invokes /my-skill.
-```
+Wallet, Lightning, federation, Bitcoin chain backend — all opt-in via Medley. A conductor with no crypto plugins runs fully and is fully secure ([S-151](specs/security/S-151-agent-crypto-ops.md)). For operators who want it: Lightning federation between conductor friends ([S-156](specs/security/S-156-lightning-federation.md)) makes spam-resistance economic, paid messaging native, and reputation a function of the payment graph itself.
 
-### Plugins
+### Self-improving graph
 
-Plugins use `maistro.plugin.json` manifests (with `openclaw.plugin.json` fallback):
+The runtime tunes itself within bounded subsystems ([S-145 §4](specs/conductor/S-145-hyperagent-graph-runtime.md)):
 
-```json
-{
-  "id": "my-channel",
-  "name": "My Channel",
-  "channels": ["my-channel"],
-  "configSchema": { "type": "object", "properties": {} }
-}
-```
+- Red/Blue ([S-026](specs/intelligence/S-026-adversarial-hardening.md)) grows the Bouncer's pattern library.
+- Tournament Arena ([S-027](specs/intelligence/S-027-tournament-arena.md)) scores recipe variants — *and per-human prompt variants*. Over time, the conductor talks to Jenny in *her* most-effective framing, opt-in.
+- Skill Forge ([S-038](specs/tools/S-038-skill-forge.md)) writes new skills; Phantom ([S-030](specs/intelligence/S-030-phantom-execution.md)) sandbox-tests them; Skill Evolution ([S-112](specs/tools/S-112-skill-evolution.md)) prunes weak ones.
 
-### Tool Compatibility
+All graph mutations are admin-signed and produce VCs in the audit log ([S-152](specs/security/S-152-agent-identity-did-vc.md)).
 
-Models trained on Claude Code work natively — Maistro automatically translates parameter conventions (`file_path` ↔ `path`, `old_string` ↔ `oldText`, `new_string` ↔ `newText`).
-
----
-
-## Configuration
-
-Maistro uses a JSON config file at `~/.maistro/maistro.json` with environment variable overrides:
-
-```bash
-# Config precedence (highest → lowest):
-# 1. Process environment variables
-# 2. ./.env (local)
-# 3. ~/.maistro/.env (user home)
-# 4. maistro.json env block
-# 5. Config file direct keys
-```
-
-All environment variables use the `MAISTRO_` prefix:
-
-| Variable                     | Purpose                                        |
-| ---------------------------- | ---------------------------------------------- |
-| `MAISTRO_GATEWAY_TOKEN`      | WebSocket auth token (64+ hex chars)           |
-| `MAISTRO_GATEWAY_PASSWORD`   | Alternative password auth                      |
-| `MAISTRO_STATE_DIR`          | Config/session storage (default: `~/.maistro`) |
-| `MAISTRO_CONFIG_PATH`        | Config file path                               |
-| `MAISTRO_BUNDLED_SKILLS_DIR` | Override bundled skills location               |
-
----
-
-## CLI Commands
-
-```bash
-maistro gateway                     # Start the gateway server
-maistro agent --message "prompt"    # Run agent in CLI mode
-maistro channels status             # Check channel health
-maistro models list                 # Show available models
-maistro onboard                     # Interactive setup wizard
-maistro doctor                      # Diagnose configuration issues
-maistro sessions list               # List active sessions
-maistro message send --to @user     # Send a direct message
-```
-
----
-
-## Security
-
-Maistro is security-hardened with multiple layers of protection:
-
-- **Sandbox Environment Sanitization** — 50+ sensitive env var patterns blocked from Docker sandboxes (API keys, tokens, passwords, AWS/SSH/GPG credentials). Configurable allowlist for explicit overrides.
-
-- **Trust Boundaries** — Per-agent permission grants with glob-based path access control. Dangerous commands (`rm -rf`, `sudo`, `chmod 777`, `curl | sh`, `eval`) are detected and blocked.
-
-- **CSPRNG Token Generation** — All security-sensitive IDs use `crypto.randomBytes()` instead of `Math.random()`. Shared utility at `src/utils/secure-random.ts`.
-
-- **IDN Homoglyph Protection** — Origin checking normalizes international domain names via `domainToASCII()` to prevent Cyrillic/mixed-script lookalike attacks.
-
-- **DM Pairing** — Unknown senders must complete a pairing code flow before accessing the assistant.
-
-- **Rate Limiting** — Per-gateway, per-channel, and per-peer rate limits with configurable thresholds.
-
----
-
-## LLM Providers
-
-| Provider           | Auth                 | Notes                                |
-| ------------------ | -------------------- | ------------------------------------ |
-| **Anthropic**      | `ANTHROPIC_API_KEY`  | Claude models, thinking mode support |
-| **Google Gemini**  | `GEMINI_API_KEY`     | Gemini models                        |
-| **Ollama**         | `OLLAMA_HOST`        | Local models, no API key needed      |
-| **OpenRouter**     | `OPENROUTER_API_KEY` | Multi-provider gateway               |
-| **GitHub Copilot** | OAuth                | Via Copilot proxy extension          |
-| **Qwen**           | `QWEN_API_KEY`       | Via portal auth extension            |
-| **Minimax**        | `MINIMAX_API_KEY`    | Via portal auth extension            |
-| **OpenAI**         | `OPENAI_API_KEY`     | OpenAI-compatible endpoints          |
-| **Custom**         | Configurable         | Any OpenAI-compatible API            |
-
-Model fallback chains are configurable — if a primary provider is rate-limited or errors, Maistro automatically falls back to the next provider in the chain.
-
----
-
-## Built-in Skills (54)
-
-<details>
-<summary>Click to expand full skill list</summary>
-
-| Skill                | Description                                   |
-| -------------------- | --------------------------------------------- |
-| `github`             | GitHub CLI integration (issues, PRs, actions) |
-| `gh-issues`          | GitHub issue management                       |
-| `trello`             | Trello board management                       |
-| `notion`             | Notion page and database access               |
-| `slack`              | Slack workspace tools                         |
-| `discord`            | Discord server management                     |
-| `spotify-player`     | Spotify playback control                      |
-| `weather`            | Weather forecasts                             |
-| `camsnap`            | Camera snapshot capture                       |
-| `coding-agent`       | Autonomous coding sub-agent                   |
-| `summarize`          | Content summarization                         |
-| `tmux`               | Terminal multiplexer control                  |
-| `obsidian`           | Obsidian vault access                         |
-| `bear-notes`         | Bear notes integration                        |
-| `apple-notes`        | Apple Notes access                            |
-| `apple-reminders`    | Apple Reminders sync                          |
-| `1password`          | 1Password secret lookup                       |
-| `openai-whisper`     | Local speech transcription                    |
-| `openai-whisper-api` | Cloud speech transcription                    |
-| `openai-image-gen`   | Image generation                              |
-| `voice-call`         | Voice call handling                           |
-| `session-logs`       | Session log viewer                            |
-| `model-usage`        | Token usage tracking                          |
-| `gemini`             | Gemini-specific tools                         |
-| `oracle`             | Knowledge base queries                        |
-| `blogwatcher`        | Blog/RSS monitoring                           |
-| `food-order`         | Food ordering assistant                       |
-| `goplaces`           | Location/places search                        |
-| `himalaya`           | Email client (himalaya)                       |
-| `imsg`               | iMessage tools                                |
-| `bluebubbles`        | BlueBubbles iMessage bridge                   |
-| `sonoscli`           | Sonos speaker control                         |
-| `openhue`            | Philips Hue lighting                          |
-| `things-mac`         | Things 3 task manager                         |
-| `gifgrep`            | GIF search                                    |
-| `songsee`            | Song identification                           |
-| `ordercli`           | Order tracking                                |
-| `sag`                | Search and grep utility                       |
-| `gog`                | Git operations                                |
-| `wacli`              | WhatsApp CLI tools                            |
-| `mcporter`           | Minecraft server tools                        |
-| `video-frames`       | Video frame extraction                        |
-| `clawhub`            | Extension marketplace                         |
-| `blucli`             | Bluetooth CLI tools                           |
-| `eightctl`           | 8sleep bed control                            |
-| `sherpa-onnx-tts`    | Local TTS (Sherpa ONNX)                       |
-| `nano-banana-pro`    | Nano device control                           |
-| `nano-pdf`           | PDF processing                                |
-
-</details>
-
----
-
-## Docker Deployment
-
-The included `Dockerfile` builds a security-hardened container:
-
-- Non-root user execution
-- Read-only filesystem
-- Dropped Linux capabilities
-- Multi-stage build for minimal image size
-
-```yaml
-# docker-compose.yml (simplified)
-services:
-  maistro-gateway:
-    build: .
-    ports:
-      - "18789:18789"
-    env_file: .env
-    volumes:
-      - maistro-data:/home/maistro/.maistro
-    restart: unless-stopped
-```
-
----
-
-## Project Structure
+### Browser-first install
 
 ```
-├── maistro.mjs                  # CLI entry point
-├── src/
-│   ├── gateway/                 # WebSocket gateway server
-│   ├── conductor/               # Multi-agent orchestration
-│   │   ├── ensemble/            # Ultra Think pipeline
-│   │   ├── memory/              # 5-layer memory stack
-│   │   └── security/            # Trust boundaries
-│   ├── agents/                  # Agent runtime & tools
-│   │   ├── skills/              # Skill loading system
-│   │   └── sandbox/             # Docker sandbox management
-│   ├── channels/                # Channel plugin framework
-│   ├── auto-reply/              # Message routing & delivery
-│   ├── plugin-sdk/              # Public plugin SDK
-│   ├── config/                  # Zod-validated configuration
-│   ├── hooks/                   # Lifecycle hook system
-│   └── utils/                   # Shared utilities
-├── extensions/                  # 41 channel & provider plugins
-├── skills/                      # 54 bundled skills
-├── packages/
-│   ├── clawdbot/                # Legacy compat shim
-│   └── moltbot/                 # Legacy compat shim
-├── Dockerfile
-├── docker-compose.yml
-└── fly.toml                     # Fly.io deployment config
+# Linux / macOS
+curl -fsSL maistro.dev/install.sh | sh
+
+# Windows
+Double-click the signed maistro-setup.msi
+
+→ conductor binary installs as a service
+→ spawns localhost:9999 wizard
+→ opens browser
+→ wizard walks you through seed, admin, users, network, TLS, LLM, channels, optional crypto
+→ ~5 minutes to a working conductor
 ```
+
+Full flow: [S-139](specs/infra/S-139-setup-wizard.md). CLI fallback for headless deploys; signed `.msi` for Windows; signed `.pkg` for macOS users who prefer GUI install.
 
 ---
 
-## Hook System
+## Spec-driven
 
-Hooks let you run shell commands in response to lifecycle events:
+Every claim in this README is a spec in [`specs/`](specs/) with acceptance criteria, file pointers, and verification steps. The master timeline is [`specs/TIMELINE.md`](specs/TIMELINE.md).
 
-```json
-{
-  "hooks": {
-    "message.inbound": "logger --tag maistro 'Inbound: $MESSAGE'",
-    "session.created": "notify-send 'New session started'",
-    "agent.beforeToolCall": "echo $TOOL_NAME >> /tmp/tool-log.txt"
-  }
-}
-```
+Security comparison vs OpenClaw: [`specs/security/ARCHITECTURE.md`](specs/security/ARCHITECTURE.md) §5.
 
-Available events: `message.inbound`, `message.outbound`, `session.created`, `session.ended`, `agent.beforeToolCall`, `agent.afterToolCall`, `cron.execute`.
+The spec tree is the single source of truth. Old `CONDUCTOR-ROADMAP.md` and `BACKLOG.md` are deprecated and kept for historical reference only.
 
 ---
 
-## Testing
+## Quick links
 
-```bash
-npm test                  # Full test suite (vitest)
-npm run test:fast         # Unit tests only
-npm run test:coverage     # Coverage report (70% threshold)
-npm run test:live         # Live provider tests (requires API keys)
-```
+- [**Philosophy**](specs/security/PHILOSOPHY.md) — the why
+- [**Architecture white paper**](specs/security/ARCHITECTURE.md) — layer-by-layer + OpenClaw comparison
+- [**Hyperagent Graph Runtime**](specs/conductor/S-145-hyperagent-graph-runtime.md) — the meta-spec
+- [**Agent Conductor product definition**](specs/conductor/S-138-agent-conductor.md) — the household SKU
+- [**Setup wizard**](specs/infra/S-139-setup-wizard.md) — the install ceremony
+- [**Node + Graph Designer**](specs/infra/S-159-node-graph-designer.md) — the visual composer
+- [**Human-as-node**](specs/conductor/S-158-human-as-node.md) — Jenny in HR is a first-class node
+- [**Lightning federation**](specs/security/S-156-lightning-federation.md) — paid messaging between conductor friends (opt-in)
+- [**TIMELINE**](specs/TIMELINE.md) — the master chronology
 
 ---
 
-## Contributing
+## Status
 
-1. Fork the repository
-2. Create a feature branch
-3. Write tests for new functionality
-4. Ensure `npm test` passes
-5. Submit a pull request
+In design. The spec tree is the deliverable today; implementation is being staged spec-by-spec via the methodology in `CONTRIBUTING.md`: **specs → Gherkin scenarios → contracts → tests → implementation → mobile**.
+
+No running gateway / no installable binary yet. If you're here to evaluate the architecture, start with `specs/security/ARCHITECTURE.md` and `specs/security/PHILOSOPHY.md`.
 
 ---
 

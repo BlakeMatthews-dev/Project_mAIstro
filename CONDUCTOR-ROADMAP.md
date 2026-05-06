@@ -1,5 +1,9 @@
 # Conductor Roadmap
 
+> **Deprecated** — this file is no longer the source of truth.
+> Feature specs live in [`specs/`](specs/) and the master timeline is [`specs/TIMELINE.md`](specs/TIMELINE.md).
+> This file is kept for historical reference; do not update it.
+
 **Last updated:** 2026-03-23
 
 ## Built and Running
