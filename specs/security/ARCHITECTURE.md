@@ -33,7 +33,7 @@ Nothing here is novel cryptography. The novelty is the integration: a single, sp
 |---|---|---|
 | User credentials & API keys | Vaultwarden (S-023) | Cloud LLM quotas, payment surface, third-party blast radius |
 | Episodic memory (7 tiers) | Postgres + git-tracked changelog (S-032, S-033) | Long-term knowledge of users, schedules, secrets-by-implication |
-| Skills (`~/.conductor/skills/`) | Local disk, optionally pulled from ClawHub (S-035, S-037) | Arbitrary code paths the conductor can execute |
+| Skills (`~/.conductor/skills/`) | Local disk, optionally pulled from Medley (S-035, S-037) | Arbitrary code paths the conductor can execute |
 | Heartbeat task queue | In-memory + Obsidian inbox | Privileged background execution context (S-001) |
 | Voice / phone / Telegram channels | HA Assist, ha_notify, Telegram bot (S-041–S-043, S-131) | Authenticated side-channel into the conductor |
 
@@ -42,9 +42,9 @@ Nothing here is novel cryptography. The novelty is the integration: a single, sp
 | Adversary | Capability | Mitigation focus |
 |---|---|---|
 | **Prompt-injecting peer** | Sends crafted text in chat / email / voice transcript | Bouncer (S-022), capability scoping (S-024) |
-| **Web content under tool control** | Search results, fetched pages, RSS, ClawHub skill READMEs | Bouncer on tool inputs, Phantom Execution on skills (S-030) |
+| **Web content under tool control** | Search results, fetched pages, RSS, Medley plugin READMEs | Bouncer on tool inputs, Phantom Execution on skills (S-030) |
 | **Compromised cloud LLM response** | Model returns malicious tool call sequence | Tool whitelist per role, 3-round chat cap, Bouncer on tool args |
-| **Malicious skill author** | Publishes a skill with a backdoor or exfil | Trust tiers, gitleaks, Phantom shadow run, ClawHub signing (S-111) |
+| **Malicious skill author** | Publishes a skill with a backdoor or exfil | Trust tiers, gitleaks, Phantom shadow run, Medley publisher VCs (S-111) |
 | **Local network attacker** | LAN-side traffic to internal services | Keycloak SSO + oauth2-proxy in front of every service (S-017, S-018) |
 | **Stolen device** | Has Telegram / mobile app session | Channel allowlist re-validation per request (S-131); JWT refresh + revocation |
 
@@ -109,7 +109,7 @@ References: **S-023**, **S-109**
 
 - All API keys, channel tokens, DB passwords pulled from Vaultwarden at startup via its API.
 - No plaintext in `.env`, no plaintext in config files, no plaintext in skills.
-- `gitleaks` runs as a pre-commit hook and as a Bouncer step on every ClawHub install.
+- `gitleaks` runs as a pre-commit hook and as a Bouncer step on every Medley install.
 - **S-109** tracks the in-progress migration of legacy env-var secrets; the acceptance criterion is _zero plaintext secrets in any tracked config file_.
 
 **Quick reference — adding a new secret:**
@@ -161,11 +161,11 @@ A "skill" is a `SKILL.md` + executable bundle that the conductor can invoke. Tru
 | **untrusted** | Read its own dir; no shell, no network | Default for newly forged or freshly installed skills |
 | **shadow** | Run inside Phantom (sandbox; no real side effects) | After gitleaks pass; auto-promoted on Phantom success |
 | **trusted** | Full skill capability (shell, network, file_ops) | After N successful Phantom runs + human review |
-| **featured** | Surfaced in ClawHub recommendations | Top-of-leaderboard performance over time (S-112) |
+| **featured** | Surfaced in Medley featured recommendations | Top-of-leaderboard performance over time (S-112) |
 
 - **Phantom Execution (S-030)** runs a candidate skill against synthetic inputs, captures all side-effect attempts (writes, network calls, env reads), and reports them to the dashboard.
 - **Skill Forge (S-038)** — when the conductor writes a *new* skill on demand, it is born untrusted and *must* go through Phantom before it can be installed.
-- **ClawHub publishing (S-111, planned)** — published skills will be signed; install-time signature verification before trust promotion.
+- **Medley publishing (S-111)** — published plugins ship with publisher VCs (S-152); install-time verification of the VC against the publisher's DID document gates trust promotion. Unsigned plugins require explicit `--allow-unsigned` + admin signature.
 
 ### 3.6 Channel Hardening
 
@@ -216,7 +216,7 @@ The two systems share a threat surface but make different bets about *where* to 
 | **Prompt-injection defense** | Bouncer: 20+ regex + LLM negative pass on every prompt (S-022) | "Behavior blacklists" + agent self-policing against a red-line command list. Acknowledged limitation: "relies on the AI Agent autonomously determining whether a command hits a red line" — weaker models systematically misjudge. |
 | **Capability scoping** | Typed `AgentSpec`, immutable, role-keyed tool whitelist (S-002–S-005) | In-action permission narrowing; configuration in `openclaw.json` / `exec-approvals.json`. No equivalent of an empty-tools `CONVERSATION` role. |
 | **Tool / skill sandboxing** | 4-tier trust + Phantom Execution shadow run (S-030, S-035) | Skill *inspection* on install, update, abnormal behavior, or fingerprint mismatch. `chattr +i` to lock core configs (note: never `exec-approvals.json`). No shadow-execution sandbox in the public guide. |
-| **Marketplace integrity** | gitleaks scan + (planned) signed publishes (S-037, S-111) | Skill registry exists (>5,400 skills via VoltAgent's curated awesome-list). Cisco found a malicious skill performing data exfiltration, noting "the skill repository lacked adequate vetting." |
+| **Marketplace integrity** | gitleaks scan + signed publisher VCs (S-037, S-111) | Skill registry exists (>5,400 skills via VoltAgent's curated awesome-list). Cisco found a malicious skill performing data exfiltration, noting "the skill repository lacked adequate vetting." |
 | **Channel allowlists** | Telegram normalized (S-131); voice/email allowlist (S-041, S-103) | Telegram bot token handling covered for audit notifications; broader channel allowlists not in the guide. |
 | **Audit trail** | Langfuse traces (per-call) + git-committed memory writes (S-021, S-033) | Nightly automated audit, 13 core metrics, persistent reports in `$OC/security-reports/` with 30-day rotation. Brain-git backup for disaster recovery. |
 | **Real-time vs post-hoc** | Real-time (Bouncer pre-execution) + per-call traces | Explicitly post-hoc: "Nightly audits … can only discover anomalies that have already occurred and cannot roll back damage already done." |
@@ -271,7 +271,7 @@ This is a real residual risk and should be stated plainly to operators of either
 |---|---|---|
 | Plaintext secrets remain in some legacy configs | S-109 | in progress |
 | Dashboard still HTTP-only inside the LAN | S-101 | planned |
-| ClawHub publishes are not yet signed | S-111 | planned |
+| Medley publishes are not yet signed (publisher VC verification) | S-111 | drafted |
 | Skill pruning is manual; weak skills accumulate | S-112 | planned |
 | Chaos coverage is informal | S-113 | planned |
 | Cross-instance memory sharing has no privacy story | S-114 | research |
@@ -321,7 +321,7 @@ All references are stable spec IDs in `specs/`. Each spec carries its own accept
 - Secrets: [S-023](S-023-secrets-manager.md), [S-109](S-109-secrets-migration.md)
 - Input filter: [S-022](S-022-bouncer.md), [S-026](../intelligence/S-026-adversarial-hardening.md)
 - Capability scoping: [S-002](../conductor/S-002-factory-spawner.md), [S-003](../conductor/S-003-artifact-intent.md), [S-004](../conductor/S-004-conversation-intent.md), [S-005](../conductor/S-005-agent-factory.md), [S-007](../conductor/S-007-3-phase-classifier.md), [S-010](../conductor/S-010-session-isolation.md)
-- Skills: [S-030](../intelligence/S-030-phantom-execution.md), [S-035](../tools/S-035-skills-subsystem.md), [S-037](../tools/S-037-clawhub.md), [S-038](../tools/S-038-skill-forge.md), [S-111](../tools/S-111-clawhub-full.md), [S-112](../tools/S-112-skill-evolution.md)
+- Skills + Medley: [S-030](../intelligence/S-030-phantom-execution.md), [S-035](../tools/S-035-skills-subsystem.md), [S-037](../tools/S-037-clawhub.md), [S-038](../tools/S-038-skill-forge.md), [S-111](../tools/S-111-clawhub-full.md), [S-112](../tools/S-112-skill-evolution.md)
 - Channels: [S-041](../channels/S-041-voice-agent.md), [S-103](../channels/S-103-email-channel.md), [S-131](S-131-group-policy-hardening.md)
 - Audit: [S-016](../infra/S-016-dashboard-ui.md), [S-021](../infra/S-021-service-integration.md), [S-028](../intelligence/S-028-context-archaeology.md), [S-033](../intelligence/S-033-memory-evolution.md)
 - Self-hardening: [S-026](../intelligence/S-026-adversarial-hardening.md), [S-027](../intelligence/S-027-tournament-arena.md), [S-113](../tools/S-113-stress-rehearsal.md)
