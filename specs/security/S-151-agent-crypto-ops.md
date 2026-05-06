@@ -13,6 +13,14 @@ commits: []
 
 # S-151: Agent Crypto Operations & Spending Policy
 
+## Crypto is optional
+
+This spec describes capabilities a conductor *can* have if the operator opts in via Medley plugins (`medley install bitcoin`, `medley install lightning`, etc.). **None of the conductor's core functions — privilege separation, vault, identity, federation, the AI agent itself — depend on this spec.** A conductor with no crypto Medley plugins installed has no wallet, no LN node, signs no transactions, and federates over DID/VC + substrate (S-152, S-153) without any payment layer.
+
+The wizard's crypto step defaults to **Skip**. Operators who want crypto features opt in deliberately. Operators who don't get a fully functional conductor with no crypto in any chain.
+
+The Conductor Seed (S-149) is generated regardless because it is the root of trust for *all* signing — AgentSpec, audit log, elevation approvals — not just for wallets. Wallet derivation paths (BIP44) exist on the seed but **are never instantiated** unless the operator opts in to a wallet plugin. The seed is your identity; whether it ever signs a Bitcoin tx is your choice.
+
 ## Problem
 
 Once the Conductor Seed (S-149) can derive wallet keys, the natural question is: can the agent spend? The naive answer ("yes, sign anything") is reckless: a single prompt-injection could drain a wallet. The defensive answer ("never") forfeits the entire crypto-native value proposition. We need a structured policy that makes "agent has wallet" sane.
@@ -101,11 +109,41 @@ Dashboard prompt format:
 
 Tapping `Sign in wallet` triggers a push to admin's phone. Admin sees the same payload in their wallet app's signing prompt. Signs. Operation proceeds.
 
+### 5. Faucet onboarding for first-time crypto users
+
+Federation operations and tipping cost sats. New operators shouldn't need to acquire Bitcoin out-of-band before their conductor can do its first federation handshake or receive its first tip. The wizard offers four funding paths during `medley install lightning`:
+
+```
+? Fund your Lightning hot channel:
+  > Get free starter sats (~1000 sats from a curated faucet)
+      • Real mainnet sats, ~$0.65 at current price
+      • Enough for ~1000 federation handshakes (1 sat each)
+      • Sources rotated from a configurable list to avoid abuse
+
+    Pay an invoice from your existing wallet
+      • Wizard generates a 5000-sat BOLT-12 / LNurl-pay invoice
+      • Pay from Phoenix / Mutiny / Zeus / Breez / etc.
+
+    Connect to my existing Lightning node (advanced)
+      • Watch-only / signing-via-RPC mode against your LND / CLN / LDK node
+      • No local funds held by the conductor
+
+    Skip — fund later
+      • LN node runs but federation gated until funded
+      • Sovereignty-first default for operators who refuse all third parties
+```
+
+Honest UX disclosure for the faucet path: *"This is real money — about $0.65 at today's price — being given to your conductor by a community faucet. Verify the receive arrived. For serious use, fund from your own wallet."*
+
+#### Testnet / signet for development
+
+The wizard's `--testnet` or `--signet` flag (or environment variable `MAISTRO_NETWORK`) makes everything cost test sats. Use Mutinynet (signet variant) for Lightning testing without real-money risk. Recommended during development, demo, and learning. Conductor enforces "testnet history before mainnet" via Phantom (S-030) regardless of network selection.
+
 ### Lightning support, day one
 
-Lightning is the single most important crypto feature and the anchor of the day-one positioning claim:
+Lightning is the most important crypto feature for the audience that opts into S-151:
 
-- `medley install lightning` is offered as an optional step in the setup wizard (default-installable for crypto-native users).
+- `medley install lightning` is offered as an optional step in the setup wizard (default-installable for operators who chose `lightning` or `bitcoin+lightning` in the crypto step).
 - Embed LDK (Lightning Dev Kit, Rust-native) inside the conductor binary or run it as a sidecar.
 - Hot-channel balance cap (default $50 worth in sats, configurable).
 - Channel open / close requires admin (cold) signature.
@@ -115,7 +153,7 @@ Lightning is the single most important crypto feature and the anchor of the day-
 - Receive-only by default; spending unlocked by admin via dashboard policy edit.
 - Tips arrive at the public address → message board entry ("You received 4200 sats from <node-id> with note: 'thanks for the digest'").
 
-Tagline this enables: **"Lightning-integrated from day one. Tip your conductor. Sign elevation with your wallet. Pay for compute in sats."**
+Tagline this enables: **"Lightning-integrated from day one, for operators who want it. Tip your conductor. Sign elevation with your wallet. Pay for compute in sats."**
 
 ### Bouncer integration (extends S-022)
 
@@ -134,6 +172,11 @@ New regex tier specifically for crypto-operation prompts and tool args:
 
 ## Acceptance Criteria
 
+- [ ] **A conductor with no crypto plugins installed runs end-to-end** (Bouncer, vault, federation, agent loop) with no wallet code paths invoked
+- [ ] Wizard crypto step defaults to Skip; explicitly choosing crypto is required to proceed with any wallet plugin
+- [ ] Faucet onboarding succeeds end-to-end on a fresh install: ~1000 starter sats arrive at the conductor's hot channel within 60s
+- [ ] All four faucet-onboarding paths work (faucet, BYO invoice, BYO node, skip)
+- [ ] `--signet` / `--testnet` flag makes all wallet ops cost test sats; no real-money path is reachable in this mode
 - [ ] Propose / sign / execute round-trip works on testnet for Bitcoin, Lightning, and an EVM chain
 - [ ] Daily cap blocks a tx that would exceed it; admin can override only with cold-key signature
 - [ ] Cooling-off enforced: tx to a new address is queued, not signed, until the cooling period elapses
@@ -155,11 +198,17 @@ New regex tier specifically for crypto-operation prompts and tool args:
 - **Push transport for HITL:** WebPush (VAPID) + end-to-end-encrypted payload (S-150 mode 3 protocol).
 - **Spending-policy storage:** sqlite-vec (S-140) under `policy` table; policy edits emit a signed audit-log entry.
 - **Bouncer crypto patterns:** maintained as a separate file `~/.conductor/bouncer/crypto.regex`; ships with a default set, augmented by Red Team (S-026).
+- **Faucet sources:** rotated from a configurable list. Defaults to a small set of known community faucets (Olympus/ZBD-style, LNbits-based) plus Mutinynet faucet for signet. Operators can override with their own preferred faucet via config. Faucet receive is verified end-to-end (LNurl-withdraw signature check) before the wizard reports success.
 
 ## Verification
 
+- **Conductor without crypto plugins:** start with `wizard --crypto skip`; verify all non-crypto features (federation handshake via DID/VC + substrate, agent loop, Bouncer, vault) work; verify no wallet / LN / chain RPC code paths are exercised (tcpdump, code coverage).
 - `medley install bitcoin` → propose `conductor send <addr> 1000sats` → admin signs in mobile wallet → signet broadcast → record in audit log.
 - `medley install lightning` → channel opens to a configured LSP (Voltage / Olympus / Mutiny LSP) → incoming tip received → message board entry.
+- **Faucet path:** wizard option "Get free starter sats" → ~1000 sats arrive at hot channel within 60s; receipt is verifiable via LNurl-withdraw signature.
+- **BYO invoice path:** wizard generates a 5000-sat BOLT-12; payment from Phoenix arrives; balance updates correctly.
+- **BYO node path:** conductor uses operator's LND for funding; no local funds held; verify via `bitcoin-cli getbalance` against the conductor's wallet path = 0.
+- **Skip path:** wizard completes; LN node runs; federation handshake fails with structured error "hot channel not funded"; node is otherwise functional.
 - Configure `daily_cap_sats: 1000`; attempt a 1500-sat send → blocked with structured policy error.
 - Simulated user1 destructive op (`rm -rf /home/blake/important/`) → push notification to admin's wallet → BIP-322 signature → op proceeds.
 - First install of a new Lightning plugin attempts mainnet → Phantom blocks, redirects to signet, requires N successful runs + admin promotion signature.
