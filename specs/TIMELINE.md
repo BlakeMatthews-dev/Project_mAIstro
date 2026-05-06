@@ -49,13 +49,13 @@ Experimental agents, adversarial hardening, memory consolidation, and temporal r
 
 ---
 
-## Phase 2: Skills & Forge (Mar 23 2026)
+## Phase 2: Medley & Forge (Mar 23 2026)
 
-Skill ecosystem: discovery, install, security scanning, autonomous skill creation, and Ultra Think.
+Plugin ecosystem: discovery, install, security scanning, autonomous skill creation, and Ultra Think.
 
 | Spec | Feature | Status |
 |------|---------|--------|
-| [S-037](tools/S-037-clawhub.md) | ClawHub — community skill marketplace | ✓ |
+| [S-037](tools/S-037-clawhub.md) | Medley — community plugin marketplace | ✓ |
 | [S-038](tools/S-038-skill-forge.md) | Skill Forge — agent writes its own skills | ✓ |
 | [S-039](tools/S-039-ultra-think.md) | Ultra Think — multi-model, quota-aware deep reasoning | ✓ |
 | [S-040](tools/S-040-project-build-agents.md) | Project build agents (Scout, Architect, Extractor, Validator) | ✓ |
@@ -98,7 +98,7 @@ Voice integration, phone notifications, per-user isolation, and conversational i
 
 ## Phase 4b: Historical Plans (Jan–Feb 2026)
 
-Smaller hardening passes from the OpenClaw side of the project.
+Smaller hardening passes (channel allowlists, cron normalization).
 
 | Spec | Feature | Status |
 |------|---------|--------|
@@ -136,7 +136,7 @@ Approved backlog, not yet started.
 |------|---------|----------|--------|
 | [S-101](infra/S-101-traefik-dashboard.md) | Traefik route for dashboard (HTTPS) | P2 | 15 min |
 | [S-110](tools/S-110-hooks-system.md) | General hooks system | P2 | ~250 lines |
-| [S-111](tools/S-111-clawhub-full.md) | ClawHub full (publish, versions, deps) | P2 | ~300 lines |
+| [S-111](tools/S-111-clawhub-full.md) | Medley full (publish, versions, signed VCs, deps) | P2 | ~300 lines |
 | [S-113](tools/S-113-stress-rehearsal.md) | Stress Rehearsal — chaos testing | P2 | ~250 lines |
 | [S-120](infra/S-120-obsidian-livesync.md) | CouchDB / Obsidian LiveSync | P3 | — |
 
@@ -152,6 +152,23 @@ Open questions and future directions.
 | [S-117](infra/S-117-speculative-decoding.md) | Speculative decoding (MTP) | P2 | Qwen3.5 native MTP support |
 | [S-118](infra/S-118-rpc-distributed-inference.md) | RPC distributed inference (P40 + 3070 Ti) | P2 | Split model across GPUs |
 | [S-119](infra/S-119-bf16-requantization.md) | BF16 source weight requantization | P2 | Fresh imatrix quants |
+
+---
+
+## Phase 8: Identity, Networking & Sovereignty (Apr 2026)
+
+The Agent Conductor security identity layer: BIP39 seed root of trust, hardware signing, crypto operations, DID/VC identity, pluggable networking substrate, household-private chain backend, sovereign TLS, Lightning federation.
+
+| Spec | Feature | Priority | Status |
+|------|---------|----------|--------|
+| [S-149](security/S-149-conductor-seed.md) | Conductor Seed (BIP39 + BIP32 HD root of trust) | P1 | draft |
+| [S-150](security/S-150-hardware-signing.md) | Hardware signing devices (Ledger / Trezor / YubiKey / mobile) | P2 | draft |
+| [S-151](security/S-151-agent-crypto-ops.md) | Crypto operations + Lightning + unified HITL signing | P1 | draft |
+| [S-152](security/S-152-agent-identity-did-vc.md) | Agent Identity & Verifiable Credentials (DID + VC) | P1 | draft |
+| [S-153](infra/S-153-tailscale-native.md) | Networking & identity substrate (Tailscale recommended, mesh substrates pluggable) | P1 | draft |
+| [S-154](tools/S-154-electrum-server.md) | Electrum server Medley plugin (household-private Bitcoin backend) | P2 | draft |
+| [S-155](security/S-155-internal-trust-root.md) | Internal trust root (mkcert-style local CA, sovereignty mode) | P1 | draft |
+| [S-156](security/S-156-lightning-federation.md) | Lightning-native federation (paid messaging, payment-graph reputation) | P2 | draft |
 
 ---
 
