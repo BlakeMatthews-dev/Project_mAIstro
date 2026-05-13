@@ -104,6 +104,8 @@ Reactor handlers do not write directly to SQLite. They submit transactions to `s
 - [ ] Reactor handlers cannot block the loop — long-running handler work is offloaded to a worker pool; handler return must be ≤5ms p95
 - [ ] Telemetry: per-source event count and latency visible in the Console
 - [ ] Failing handler does not crash the reactor; reactor logs the error and continues
+- [ ] SIGTERM shutdown: reactor stops accepting new events, drains in-flight handlers within a configurable grace period (default 5 s), cancels remaining work and rolls back any partial state writes, then runs a WAL checkpoint (S-140) before exit
+- [ ] Backpressure: when `state.submit()` queue depth exceeds the configured limit (default 10,000 items), the reactor pauses event delivery from the highest-volume sources rather than dropping events; handlers unable to submit state within the backpressure timeout (default 1 s) emit a `REACTOR_BACKPRESSURE_EVENT` alert
 
 ## Implementation Notes
 
@@ -112,10 +114,11 @@ Reactor handlers do not write directly to SQLite. They submit transactions to `s
 - **Windows:** IOCP via the same async runtime.
 - **Cross-platform abstraction:** Tokio (Rust) or asyncio with uvloop (Python) handle the platform differences cleanly.
 - **Worker pool:** for handlers that can't return in 5ms (e.g., LLM calls, file IO), the handler enqueues work to a worker pool and returns. The worker emits a follow-up event when it completes; the reactor handles that event in the next cycle.
-- **Backpressure:** if any source produces events faster than handlers consume, the reactor applies per-source rate limits and backpressure. A misbehaving source cannot starve others.
+- **Backpressure:** the `state.submit()` queue has a configurable depth limit (`reactor.state_queue_depth`, default 10,000 items). When at capacity, delivery from the highest-volume sources is paused until the queue drains below 80% capacity. A slow SQLite writer never causes event loss. A misbehaving source that produces events faster than handlers consume is also rate-limited at the source registration level.
 - **Hot-reload:** new event sources can be registered at runtime (e.g., a Medley plugin that adds a new source). Sources can be deregistered cleanly.
 - **Clock source:** monotonic clock for tick scheduling (immune to wall-clock changes); wall-clock for log timestamps.
 - **Migration of S-001:** existing heartbeat code is wrapped as a reactor source; no behavior change for callers. The heartbeat-runner module becomes a thin shim that registers `wall-clock-tick:30m` and dispatches to the existing `tick()` function.
+- **Shutdown (SIGTERM):** stop accepting new events; wait up to `reactor.shutdown_grace_seconds` (default 5) for in-flight handler futures to complete; cancel remaining work; run a WAL checkpoint (S-140) before exit. Handlers expecting longer shutdown windows (e.g., an in-flight LLM call) should checkpoint intermediate state to `state.submit()` proactively so that work survives the grace period.
 
 ## Verification
 
@@ -126,3 +129,5 @@ Reactor handlers do not write directly to SQLite. They submit transactions to `s
 - Filesystem-watch test: drop a file in the Obsidian inbox → reactor fires within 5ms; handler runs.
 - LN federation test: incoming Lightning keysend → reactor fires; Bouncer screens; handler dispatches to federation logic; round-trip in <100ms on a healthy network.
 - Failing handler test: register a handler that raises on every invocation; verify reactor logs the error and continues; verify telemetry shows the failure rate.
+- Shutdown test: send SIGTERM with 3 in-flight handlers; verify all complete (or are cancelled at grace-period expiry) before the process exits; verify WAL checkpoint ran; verify no partial writes remain in SQLite.
+- Backpressure test: pause the SQLite writer to saturate the `state.submit()` queue; verify event delivery pauses rather than dropping; verify `REACTOR_BACKPRESSURE_EVENT` appears in telemetry; resume the writer and verify normal operation resumes.

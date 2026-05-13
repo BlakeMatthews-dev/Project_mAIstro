@@ -6,6 +6,7 @@ status: draft
 priority: P1
 effort: ""
 created: 2026-04-25
+updated: 2026-05-13
 completed: ""
 owner: conductor
 commits: []
@@ -92,6 +93,15 @@ Served at `https://<conductor-hostname>/.well-known/did.json` whenever a substra
 
 Key identities reference the S-149 derivation tree: `#agent-spec` is `m/0'`, `#audit-log` is a sub-derivation, etc. Rotation = publish a new doc.
 
+### DID document pinning and change detection
+
+When a peer's DID document is resolved for the first time, conductor stores a **fingerprint** (SHA-256 of the canonical JSON) keyed by the peer's DID. On all subsequent resolutions:
+
+- **Fingerprint matches**: accept silently, update cache TTL.
+- **Fingerprint changed**: pause federation with that peer, post a `DID_DOCUMENT_CHANGED` alert to the admin Dashboard, and require explicit admin confirmation before accepting the new document.
+
+Silent acceptance of DID document changes is not permitted. Key rotation is a legitimate operation but so is a MITM swapping in an attacker's key; admin confirmation is the only way to distinguish them. Cached fingerprints are stored in the audit log table and are themselves signed, so they cannot be silently altered.
+
 ### Verifiable Credentials
 
 Four use cases, all using the same VC primitive:
@@ -124,10 +134,12 @@ Issuer: did:web:brigid.example.ts.net
 Subject: did:web:atelier-2.other.ts.net
 Claim: trustsForContributions: ["medical-knowledge"]
 ValidFrom: 2026-04-25
-ValidUntil: 2026-05-25
+ValidUntil: 2026-05-02   # max 7 days
 ```
 
-Federated wisdom is then accepted only when accompanied by a current trust VC from the receiving conductor's admin.
+Trust VCs have a **maximum validity of 7 days**. Peers must re-issue on each scheduled federation sync; an expired trust VC is treated the same as no VC — contributions from that peer are paused until renewed. This gives effective revocation without a status-list infrastructure: a compromised or misbehaving peer is automatically quarantined within 7 days (sooner if admin explicitly revokes by not re-issuing).
+
+There is no long-lived trust grant. Every federation relationship must be re-confirmed at least weekly.
 
 **(3) Plugin publisher VCs.** Medley plugins (S-037, S-111) ship with publisher-issued VCs:
 
@@ -168,15 +180,21 @@ Displayed in the dashboard as part of the conductor's identity card.
 - [ ] Medley install verifies plugin publisher VCs; unsigned plugins require explicit admin override
 - [ ] Key rotation: conductor can publish a new DID document with new keys; old VCs remain verifiable against the historical document (kept in `did.json.history/`)
 - [ ] Crypto-native opt-in: `medley install did-ethr` adds `did:ethr` to the `alsoKnownAs` list without disrupting the primary DID
+- [ ] Federation trust VCs have a maximum validity of 7 days; no long-lived trust grant is possible
+- [ ] Expired trust VC: contributions from that peer are paused until a new VC is issued
+- [ ] First-seen DID document fingerprint (SHA-256) is stored per peer in the signed audit log table
+- [ ] DID document change detected: federation with that peer paused, `DID_DOCUMENT_CHANGED` alert posted to Dashboard, admin confirmation required before accepting new document
+- [ ] Cached fingerprints are signed and cannot be silently altered
 
 ## Implementation Notes
 
 - **Library suggestions:** `didkit` (Spruce), `ssi-sdk`, or roll our own minimal implementation — W3C VC is small enough to implement directly in ~500 lines.
 - **Storage:** DID document is a static file regenerated on key rotation. VCs are first-class rows in the audit log table (sqlite-vec).
-- **Resolution cache:** when verifying VCs from peer conductors, cache resolved DID documents for 24h to limit substrate traffic.
+- **Resolution cache:** when verifying VCs from peer conductors, cache resolved DID documents for 24h to limit substrate traffic. Cache entries include the stored fingerprint; a fresh resolution that changes the fingerprint triggers the admin alert flow regardless of cache TTL.
 - **`did:web` hosting:** served by whatever substrate (S-153) is exposing the conductor's HTTP endpoint. With Tailscale that's `tailscale serve`; with Cloudflare Tunnel that's `cloudflared`; with manual mode that's the operator's reverse proxy. The conductor itself just serves `/.well-known/did.json` from its HTTP layer.
 - **Privacy:** DID document publication is **off by default for tailnet-private and localhost-only deployments**. The wizard explicitly asks: *"Publish your conductor's identity? (Recommended for federation. Required for some Medley plugins. Not required for normal use.)"* For Tailscale, this means choosing whether `tailscale funnel` exposes `/.well-known/did.json` to the public internet. For other substrates, equivalent decisions.
 - **Localhost-only deployments:** always have a working `did:key`. Federation and external VC verification are simply unavailable until a public-or-tailnet substrate is configured.
+- **Trust VC renewal:** federation sync job (scheduled, configurable interval, default daily) re-issues trust VCs for active peers. If a peer's fingerprint has changed since last sync, renewal is blocked until admin confirms the new document.
 
 ## Verification
 
@@ -184,7 +202,10 @@ Displayed in the dashboard as part of the conductor's identity card.
 - On a Tailscale deploy: `curl https://brigid.example.ts.net/.well-known/did.json` returns a valid DID document.
 - Run a privileged operation; the audit log entry is a signed VC.
 - Verify the VC offline using the published DID document; signature is valid.
-- Pair two conductors on the same tailnet; admin issues a trust VC from one to the other; federated contributions from the second appear in the first's Intel tab marked "verified."
+- Pair two conductors on the same tailnet; admin issues a trust VC (7-day max) from one to the other; federated contributions from the second appear in the first's Intel tab marked "verified."
+- Let the trust VC expire without renewal; verify contributions from the peer are paused and a renewal prompt appears.
 - Install an unsigned Medley plugin; install is blocked pending admin override.
 - Rotate the `m/0'` key; old audit-log VCs still verify against the historical DID document; new operations sign with the new key.
 - Switch substrate from Tailscale to Cloudflare Tunnel: DID document re-publishes at the new hostname; old `did:web:<old-host>` reads from `did.json.history/` for backward verification of past VCs.
+- Simulate a peer rotating their DID document (new key): verify `DID_DOCUMENT_CHANGED` alert appears, federation pauses, and resumes only after admin confirms the new document.
+- Replay a `DID_DOCUMENT_CHANGED` event with a tampered fingerprint record: verify the signed fingerprint storage prevents silent substitution.

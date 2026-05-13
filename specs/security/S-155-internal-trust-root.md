@@ -6,6 +6,7 @@ status: draft
 priority: P1
 effort: ""
 created: 2026-04-25
+updated: 2026-05-13
 completed: ""
 owner: conductor
 commits: []
@@ -87,6 +88,16 @@ Leaf properties:
 - **Subject Alternative Names:** all hostnames the leaf serves (dashboard variants, etc.)
 - **Extended Key Usage:** Server Authentication only
 - Signed in seconds; no external dependency
+
+### Leaf certificate revocation
+
+90-day validity is the primary mitigation — most compromised certs expire before an attacker extracts material value. For cases requiring immediate action, the conductor provides two escalating paths:
+
+**Emergency leaf rotation (fast, targeted):** `maistro tls rotate-leaf <hostname>` re-issues the leaf immediately. Since the CA key is reconstructed from the seed on demand, issuing takes seconds. The old leaf remains technically valid until expiry, but clients observing HSTS or short cache TTLs will adopt the new cert quickly. Use when a specific hostname's private key may have been exposed.
+
+**CA rotation (nuclear, full revocation):** `maistro tls rotate-ca` advances the HKDF salt (`maistro-tls-ca-v2`, etc.) to derive a completely new CA key and cert. All leaf certs signed by the old CA immediately lose validity for any client that has re-fetched the DID document (where the new CA fingerprint is published). The dashboard surfaces a `CA_ROTATION_REQUIRED` banner and guides the operator through re-running the trust install ceremony on each household device. All trust-install VCs issued under the old CA are revoked in the audit log. Use when the CA key itself may have been exposed (i.e., the Conductor Seed is compromised).
+
+**CRL endpoint:** `/trust/crl.pem` serves a valid Certificate Revocation List signed by the current CA. Updated on every leaf rotation. Most household deployments will rely on CA rotation rather than CRL infrastructure, but the endpoint is provided for operators who want active revocation signalling without a full CA rotation.
 
 ### TLS modes (operator choice)
 
@@ -234,10 +245,14 @@ A verifier resolving the conductor's DID can independently fetch the CA cert and
 - [ ] DID document publishes the CA fingerprint, URL, and name-constraints scope as a `X509TrustAnchor` service entry
 - [ ] Trust install is recorded as a Verifiable Credential signed by the conductor's DID; revocable from the dashboard
 - [ ] Name Constraints enforcement verified: a malicious cert signed by the CA for `google.com` is rejected by every modern browser
-- [ ] CA rotation: the conductor can roll the CA (advancing the HKDF salt) and the dashboard guides operators through re-installing on each device; old VC trust grants are revoked
 - [ ] **TLS mode is operator-controlled** (`public-ca`, `local-ca`, `both`); switching modes is reversible and preserves existing trust grants
 - [ ] **`local-ca` mode is fully functional even when public-CA paths are available** (no forced retirement of the local CA when LE DNS-PERSIST-01 + substrate integration ships)
 - [ ] **`local-ca` mode operators can verify, via inspection of network traffic, that no LE / public-PKI requests are made by the conductor** (sovereignty mode is observable)
+- [ ] Emergency leaf rotation (`maistro tls rotate-leaf <hostname>`) re-issues a new leaf within 5 seconds
+- [ ] CA rotation (`maistro tls rotate-ca`) derives a new CA from an advanced HKDF salt; invalidates all existing leaf certs; triggers trust re-install ceremony
+- [ ] Dashboard shows `CA_ROTATION_REQUIRED` banner after CA rotation until all registered devices have re-installed
+- [ ] `/trust/crl.pem` serves a valid CRL for the current CA; CRL updated on every leaf rotation
+- [ ] All trust-install VCs issued under a rotated CA are revoked in the audit log at rotation time
 
 ## Implementation Notes
 
@@ -246,10 +261,10 @@ A verifier resolving the conductor's DID can independently fetch the CA cert and
 - **PWA for the install ceremony:** small, single-purpose, served from the conductor itself. Detects platform via User-Agent and presents the right CA file format and install instructions. Can be Medley-distributed (`medley install conductor-trust-installer`) for users who want to keep the install client around for re-trust on new devices.
 - **iOS specifics:** the install profile is a `.mobileconfig` file containing the CA cert. Safari handles installation; the user must manually enable trust afterward. The PWA shows a video or animated demonstration of the trust-enable step — this is the highest-friction part of the install flow and deserves polish.
 - **Android specifics:** the CA installs to the user CA store, which works for Chrome / Firefox / Edge browsers. A future native Maistro Android app must include a `network_security_config.xml` declaring trust for user-installed CAs scoped to the conductor's hostnames — OR ship the CA pinned in the app, OR use Cert Pinning APIs directly.
+- **CRL generation:** `rcgen` and the Python `cryptography` library both support CRL generation. CRL is re-signed on every leaf rotation and served statically. TTL for CRL caching should be set to max 24h so that emergency rotations propagate within a day without requiring real-time OCSP.
 - **Substrate-mediated install (v3):** the substrate config (S-153) gains an optional `trust_distribution` block. When set, the conductor delegates CA-root delivery to the substrate's management plane and the QR ceremony is suppressed for devices already enrolled. Today: speculative; activate when an upstream substrate ships the feature.
 - **TLS mode switching:** mode is read at startup and on SIGHUP. Switch from `public-ca` to `local-ca`: conductor stops requesting/serving public certs and serves only local-CA leaves. Switch from `local-ca` to `public-ca`: conductor begins requesting public certs (via substrate or its own ACME client); local-CA leaves remain valid for grace period until public certs arrive. `both` mode serves whichever chain validates for a given client request.
 - **Sovereignty-mode posture:** in `local-ca` mode, the conductor must emit zero outbound requests to Let's Encrypt, ACME directories, OCSP responders, or CT logs as a result of TLS operations. Verifiable by tcpdump. Other outbound traffic (LLM calls, channel APIs) is unaffected; this constraint is about the trust chain, not all network egress.
-- **Marketing copy this enables:** *"Not your keys, not your TLS. Maistro is the only personal-AI agent platform where you can run your own certificate authority for your own agent — anchored to the seed phrase you already wrote down."*
 
 ## Verification
 
@@ -259,7 +274,9 @@ A verifier resolving the conductor's DID can independently fetch the CA cert and
 - Install on iOS via the install profile; verify the trust-enable step is required and the PWA explains it; verify validation works after enable.
 - Install on Android Chrome; verify validation works in browser; verify a test app without `network_security_config.xml` opting in to user CAs *does not* trust the cert (documented as expected behavior).
 - Issue a trust-install VC for a device; verify the VC appears in the dashboard; revoke it; verify the device is added to a revocation list.
-- Rotate the CA via the dashboard; verify the new CA fingerprint differs; verify devices that had the old CA installed are prompted to re-install via push or board entry.
+- Run `maistro tls rotate-leaf dashboard`; verify new cert is issued within 5 seconds; old cert still accepted by clients until TTL expires.
+- Run `maistro tls rotate-ca`; verify `CA_ROTATION_REQUIRED` banner appears on dashboard; devices with old CA installed see cert warnings; re-running trust install ceremony clears the banner.
+- Fetch `/trust/crl.pem` after a leaf rotation; verify the CRL is valid, signed by the current CA, and lists the rotated leaf's serial.
 - **Mode switch test:** start in `public-ca`; switch to `local-ca`; verify zero LE / ACME / OCSP / CT-log outbound traffic via tcpdump; verify TLS connections still serve cleanly to devices that have completed the trust install ceremony.
 - **Sovereignty observability:** run the conductor in `local-ca` mode for 24h; capture all outbound network traffic; verify no public-PKI endpoint appears in the destination set.
 - Once a substrate makes a public-CA chain available for the same hostname (test setup), verify the operator can choose to switch (`public-ca`), stay (`local-ca`), or run both (`both`); none of the three options is forced.

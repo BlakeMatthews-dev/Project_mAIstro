@@ -155,6 +155,19 @@ Step 11 — Smoke tests (the install-time security audit)
         These are baseline assertions the operator can re-run later ("the install-
           time guarantees still hold").
 
+        FAILURE HANDLING: if any smoke test fails, the conductor enters
+          SETUP_INCOMPLETE mode. In this mode:
+          - Only localhost connections are accepted; the substrate URL is not
+            activated until all smoke tests pass.
+          - The dashboard shows a SMOKE_TEST_FAILED banner naming the failing test
+            and linking to remediation steps.
+          - The Conductor Seed, admin keypair, vault, and user accounts created in
+            Steps 2-5 remain intact; no rollback of those steps is required.
+          - The operator fixes the root cause (guided by the banner) and re-runs
+            smoke tests via `maistro setup --retry-smoke-tests` without restarting
+            the full wizard.
+          - Non-localhost connections are enabled only after all five smoke tests pass.
+
 Step 12 — Finalize
         Wizard summary page:
           - Conductor name, instance ID, DID
@@ -229,6 +242,7 @@ Result: a working conductor with zero outbound traffic to any third party. The s
 - [ ] All 12 steps render correctly on Chromium, Firefox, Safari (desktop + mobile-responsive)
 - [ ] Step 4 (Create user one) is structurally required — form does not advance without a name; verified by browser automation
 - [ ] Step 11 smoke tests run live and display real pass/fail; failures block wizard completion with clear remediation steps
+- [ ] Step 11 smoke test failure: conductor enters `SETUP_INCOMPLETE` mode (localhost-only); a `SMOKE_TEST_FAILED` dashboard banner names the failing test with remediation steps; operator can re-run via `maistro setup --retry-smoke-tests` without restarting the wizard; non-localhost connections enabled only after all five smoke tests pass
 - [ ] Wizard state persists across browser close + reopen + conductor crash
 - [ ] CLI fallback (`--cli`) walks the same logical flow with a TUI presenter; verified on a no-display VM
 - [ ] Headless install: prints URL + token + ssh-tunnel instructions when no graphical session detected
@@ -252,6 +266,7 @@ Result: a working conductor with zero outbound traffic to any third party. The s
 - **Validation:** Zod-style schemas client-side and server-side; both validate every wizard input.
 - **i18n:** strings localized; English default. Sovereignty audience overlaps significantly with non-English-first users; localization is not a v2 concern.
 - **Telemetry default-off:** the wizard explicitly does not phone home about completion / failure. If telemetry is ever added, it's opt-in with a separate spec.
+- **SETUP_INCOMPLETE mode:** implemented as a conductor startup flag written to `~/.conductor/state.json`. The conductor checks this flag at every incoming non-localhost connection and returns 503 with a link to the recovery steps. The flag is cleared atomically (SQLite transaction + file write) when all smoke tests pass.
 - **Composition with PHILOSOPHY:** the wizard is the operator-facing artifact of the philosophy doc's invariants. Step 4 (user1 mandatory) is the philosophy's invariant #1 in concrete UX form. Step 11 (smoke tests) is the philosophy's claims ("Bouncer rejects injection," "vault is brokered," etc.) validated at install time.
 
 ## Verification
@@ -263,7 +278,7 @@ Result: a working conductor with zero outbound traffic to any third party. The s
 - Resume test: kill the wizard browser tab mid-Step 7 (TLS mode); reopen the URL; verify the wizard resumes at Step 7 with previous steps' state intact.
 - Crash test: kill `maistro` process during Step 6; restart `maistro setup`; verify the wizard resumes.
 - Hardware-wallet test: connect Ledger at Step 2; complete seed-from-device flow; verify conductor never holds raw seed material.
-- Smoke-tests test (Step 11): inject a fault in the Bouncer (test mode) so the prompt-injection payload is *not* rejected; verify the wizard reports failure and refuses to complete.
+- Smoke-tests failure test: inject a fault in the Bouncer (test mode) so the prompt-injection payload is *not* rejected; verify the wizard reports failure, conductor enters SETUP_INCOMPLETE mode, external connections refused; fix the Bouncer; verify `maistro setup --retry-smoke-tests` clears the flag and enables external connections.
 - Cross-browser: complete wizard on Chromium, Firefox, Safari; identical behavior, identical post-install state.
 - Re-run test: complete wizard, then run `maistro setup` again; verify reconfigure / reset menu appears and respects admin-signature gate for reset.
 - Windows .msi: complete install on a fresh Windows 11 VM; SmartScreen recognizes signature; wizard opens in default browser; conductor runs as Windows Service; ARP / Add-Remove Programs entry exists.

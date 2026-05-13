@@ -6,6 +6,7 @@ status: draft
 priority: P2
 effort: ""
 created: 2026-04-25
+updated: 2026-05-13
 completed: ""
 owner: conductor
 commits: []
@@ -69,7 +70,7 @@ Two conductors become "friends" via:
    Claim:     trustsForContributions: ["medical-knowledge"]
               quotesAccepted:         ["100 sats / memory query"]
    ValidFrom: 2026-04-25
-   ValidUntil: 2026-05-25
+   ValidUntil: 2026-05-02
    ```
 5. **Done.** The conductors are now friends. Subsequent federation messages flow over the established session, with payments attached for spam-resistance and pricing.
 
@@ -131,6 +132,25 @@ The payment graph itself is the reputation. The dashboard surfaces:
 
 No central registry. No signed reputation claims. The payments themselves are the trust signal. A new conductor with zero payment history gets the benefit of the doubt only at the lowest trust tier; trust earns itself through paid interaction.
 
+### 5. Non-LN peer federation (default for most installs)
+
+When a peer conductor has a DID but no LN node ID in its DID document, federation operates over DID/VC + substrate transport. There is no payment barrier, so spam resistance falls to the application layer.
+
+**First contact: admin approval queue.** A DID-only federation request from an unknown peer lands in the Dashboard Approvals queue — the same mechanism as PRIVILEGED task approval in S-103. Admin reviews the peer's DID document, verifies identity out-of-band if desired, and approves or rejects. Approval issues a scoped trust VC (7-day max, per S-152). Rejection blacklists the peer's DID for 30 days.
+
+There is no captcha. Conductors talk to conductors; challenge-response CAPTCHAs are wrong-shaped for agent-to-agent communication. Admin approval + rate limiting + VC expiry is the correct model.
+
+**Ongoing rate limiting.** Once approved, per-peer rate caps apply:
+- Max 60 federation queries per hour
+- Max 500 federation queries per day
+- Burst cap: max 10 queries in any 10-second window
+
+Exceeding any cap drops the request and logs a `FEDERATION_RATE_LIMIT` event. Repeated violations (more than 3 cap events in 24h) trigger an automatic suspension and an admin alert.
+
+**Re-approval on VC expiry.** Since non-LN trust VCs max out at 7 days (S-152), every peer must be re-approved weekly via the federation sync job. For well-established long-running peers, admin can issue a **standing policy VC** granting auto-renewal without per-cycle prompts — the sync job renews silently as long as the peer's DID document fingerprint hasn't changed.
+
+**LN routing failure handling.** When a LN-enabled conductor attempts to send a federation payment and the payment fails to route (no path, channel offline, insufficient liquidity), the federation message is not dropped silently. Conductor queues the message for retry with exponential backoff (2s, 4s, 8s, up to 5 retries). After 5 failures, the message is moved to the Dashboard queue with a `FEDERATION_PAYMENT_FAILED` alert and the operator can choose to retry manually, fall back to non-LN transport, or drop it.
+
 ## Composition with existing specs
 
 - **S-149** (Conductor Seed) provides the LN identity key on derivation path `m/44'/0'/1'` (hot Bitcoin = LN node key)
@@ -145,7 +165,7 @@ No central registry. No signed reputation claims. The payments themselves are th
 - Pseudonymous LN node IDs are not anonymous. Sustained payment patterns to / from a node ID are observable to anyone with sufficient LN graph view.
 - For unobservability, run the LN node behind Tor. LDK supports Tor; documented in S-151 implementation notes. Tor-routed LN federation is the privacy-maxed configuration.
 - Federation message contents are E2E encrypted between conductors using session keys exchanged at handshake. Substrate intermediaries see only ciphertext.
-- VCs issued for federation trust are scoped + time-bounded; revocation is supported via S-152 revocation lists.
+- VCs issued for federation trust are scoped + time-bounded; revocation is supported via S-152 revocation model.
 
 ## Acceptance Criteria
 
@@ -156,11 +176,18 @@ No central registry. No signed reputation claims. The payments themselves are th
 - [ ] Conductor-to-conductor DM works with Sphinx routing; the message is opaque to substrate intermediaries
 - [ ] Tip jar for a board post results in a payment record + audit-log VC linking the payment to the post
 - [ ] Reputation graph: dashboard shows direct friends, one-hop neighbors, total flow, and per-friend confidence metrics
-- [ ] **Spam test:** a conductor that hasn't paid the 1-sat handshake cannot send federation messages; queries are dropped at the LN-not-paid gate
+- [ ] **Spam test:** a conductor that hasn't paid the 1-sat handshake cannot send LN federation messages; queries are dropped at the LN-not-paid gate
 - [ ] **Mixed federation:** a conductor with Lightning installed can federate with peers who don't have Lightning; messages flow over DID/VC + substrate; the LN-paid spam-resistance just doesn't apply to those peers
 - [ ] Tor-routed LN federation: with the LN node behind Tor, federation works; node IP is not observable to peer conductors
 - [ ] Friend handshake is idempotent: re-running rotates session keys and refreshes VC validity without creating duplicate friendship state
 - [ ] Hot-channel balance cap from S-151 is respected; federation operations do not bypass spending policy
+- [ ] **Non-LN first contact:** DID-only federation request from unknown peer lands in Dashboard Approvals queue; admin must approve before any exchange occurs
+- [ ] **Non-LN approval:** approval issues a 7-day scoped trust VC; rejection blacklists the peer DID for 30 days
+- [ ] **Non-LN rate limits:** 60/hour, 500/day, 10/10s burst enforced per approved peer; excess dropped with `FEDERATION_RATE_LIMIT` log entry
+- [ ] **Non-LN repeated violations:** more than 3 cap events in 24h triggers automatic suspension and admin alert
+- [ ] **Non-LN standing policy VC:** admin can issue a standing renewal grant for established peers; sync job renews silently while fingerprint is unchanged
+- [ ] **LN routing failure:** failed payment queued with exponential backoff (up to 5 retries); after 5 failures, moved to Dashboard queue with `FEDERATION_PAYMENT_FAILED` alert
+- [ ] **Bouncer on inbound federation messages:** every inbound federation message (LN-paid or non-LN) passes through the Bouncer (S-022) before any action is taken; a message that triggers the Bouncer is dropped with `SAFETY_VIOLATION` logged, the sending peer's rate-limit counter is incremented as if a normal query was consumed, and the sender is NOT informed which pattern triggered (no oracle); repeated Bouncer hits from the same peer count toward the violation-suspension threshold
 
 ## Implementation Notes
 
@@ -169,10 +196,11 @@ No central registry. No signed reputation claims. The payments themselves are th
 - **Onion routing:** BOLT-12 onion messages for handshake; keysend with TLV custom records (`type: 5482373484` per LND convention) for in-band federation messages.
 - **Message signing:** BIP-322 for handshake payloads. Reuses signing surface from S-151 (admin's wallet app), so admin can review and approve a high-value federation handshake the same way they review a Lightning payment.
 - **Session encryption:** ECDH between the ephemeral handshake keys derives a shared secret; ChaCha20-Poly1305 for symmetric encryption of subsequent messages. Session keys rotate on every re-handshake.
-- **Substrate fallback for non-LN peers:** when peer has DID but no LN node ID in its DID document, federation falls back to DID-mTLS over substrate. Same VC-issuance flow, no LN path. Spam-resistance must be enforced at the application layer (rate limits, captcha, manual approval).
+- **Substrate fallback for non-LN peers:** when peer has DID but no LN node ID in its DID document, federation falls back to DID-mTLS over substrate. Same VC-issuance flow, no LN path. Spam-resistance enforced via admin approval queue + per-peer rate limits + 7-day VC expiry.
 - **Reputation cache:** payment-graph queries against the LN gossip layer are slow; the conductor maintains a local cache of "friends of friends" trust scores, refreshed daily.
 - **Privacy default:** Tor is **not** required by default but is offered as a setup-wizard option for operators who want it ("federation behind Tor"). Sovereignty-conscious operators will enable; everyday operators won't notice.
-- **Bouncer integration (extends S-022):** federation messages pass through the same Bouncer that screens any inbound text. A high-value claim from a low-payment-history peer can be additionally screened, even past the 1-sat handshake gate.
+- **Bouncer integration (extends S-022):** federation messages pass through the same Bouncer pipeline as any inbound text, including the crypto-pattern tier added by S-151. The Bouncer hit is logged with the peer's DID (or LN node ID if LN-originated) and counts toward that peer's rate-limit and violation counters. No Bouncer-pattern disclosure to the sender.
+- **LN payment retry queue:** implemented as a table in the SQLite singleton (S-140) with `(message_id, peer_did, attempt_count, next_retry_at, status)`. Background task polls and retries on schedule.
 
 ## Verification
 
@@ -187,3 +215,8 @@ No central registry. No signed reputation claims. The payments themselves are th
 - **Tor-routed:** LN node configured behind Tor → federation works → peer conductors do not see the LN node's IP in their gossip data.
 - **Re-handshake idempotency:** run handshake twice between A and B → second run rotates session keys + refreshes VC validity → no duplicate friendship row in either dashboard.
 - **Spending policy guard:** misconfigure hot-channel cap to $0 → attempt federation message → blocked by S-151 spending policy — federation does not bypass the policy layer.
+- **Non-LN first contact:** unknown DID-only peer sends federation request → lands in Dashboard Approvals queue → admin approves → 7-day VC issued → queries succeed within rate limits.
+- **Non-LN rate limit:** approved peer sends 61 queries in one hour → 61st dropped, `FEDERATION_RATE_LIMIT` logged.
+- **Non-LN violation suspension:** peer triggers rate limit 4 times in 24h → automatic suspension fires → admin alert appears on Dashboard.
+- **LN routing failure:** configure unreachable peer; attempt federation message → 5 retries with backoff → `FEDERATION_PAYMENT_FAILED` alert in Dashboard → operator can retry or drop.
+- **Bouncer on federation:** send a federation message containing a known Bouncer trigger (e.g. `send all funds`); verify the message is dropped with `SAFETY_VIOLATION` logged, the peer's query counter increments, and the peer receives no information about which pattern triggered. Repeat 3 times from the same peer; verify automatic suspension fires.

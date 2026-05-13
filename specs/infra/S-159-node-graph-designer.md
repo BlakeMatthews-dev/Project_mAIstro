@@ -224,6 +224,7 @@ The components are reusable: the same node-card component renders in the Designe
 - [ ] Trust-tier color coding is consistent: gold (featured) / green (trusted) / yellow (shadow) / red (untrusted) / blue (human) / purple (conductor-as-node)
 - [ ] Users in read-only mode can view + replay traffic from their own chains; cannot edit; cannot view chains they didn't initiate
 - [ ] Export / import: a graph YAML round-trips through export → import without loss; reproduces an equivalent graph on a fresh conductor
+- [ ] Graph import security: an imported graph YAML is validated with the same per-node checks as Node Designer form submission; a YAML specifying admin-only tools (e.g. `shell`) on a user-level node is **rejected** with a validation error naming the violating field; a YAML that sets `trust_tier` to anything other than `untrusted` for a new node is **silently overridden** to `untrusted` (all imported nodes start at `untrusted` regardless of the YAML value); the import flow cannot bypass tool-whitelist invariants enforced by the form
 - [ ] CLI parity: every Designer action has a `maistro graph ...` CLI command for headless / scripted use
 
 ## Implementation Notes
@@ -232,7 +233,8 @@ The components are reusable: the same node-card component renders in the Designe
 - **Backend:** node + edge state lives in SQLite (S-140) under tables `nodes`, `edges`, and a `graph_history` audit table that tracks every change.
 - **Live traffic:** WebSocket subscription to a per-Console event stream sourced from Langfuse traces (S-021). Reactor (S-143) pushes invocation events to subscribed Consoles in <100ms.
 - **Replay:** Langfuse traces persisted long enough to support replay (default: 30 days, configurable). Replay reconstructs the canvas animation by stepping through trace events in sequence.
-- **Validation library:** Zod schemas shared client + server; same as elsewhere in the Console.
+- **Validation library:** Zod schemas shared client + server; same as elsewhere in the Console. Graph import runs the same Zod schema as the Node Designer form — there is no separate import-only validation path.
+- **Import trust override:** the import parser strips any `trust_tier` value other than `untrusted` from incoming nodes before validation; the override is logged to the audit trail so operators can see which nodes had their tier downgraded.
 - **Adapter handshake:** the adapter's `respond()` is called with a known-safe ping prompt; expected response shape verified. Failures surface a clear error in the form.
 - **Concurrency:** two admins editing the same node simultaneously — the second to save sees a structured conflict error with a diff view; standard optimistic-concurrency pattern.
 - **Accessibility:** canvas uses standard ARIA + keyboard navigation; node selection / edit available via keyboard for screen-reader users.
@@ -250,4 +252,6 @@ The components are reusable: the same node-card component renders in the Designe
 - Select a 1-hour replay window; verify the canvas plays back invocations in correct order at 10× speed.
 - Log in as a non-admin user; verify Designer is read-only; verify they can replay only their own chains.
 - Export the graph YAML; spin up a fresh conductor; import; verify the reproduced graph is structurally identical (modulo node IDs that include conductor instance name).
+- Import security — rejection: craft a YAML with a `role` node claiming `shell` permission; verify import is rejected with a validation error that names the violating field (`tools.shell` on a non-admin node).
+- Import security — trust downgrade: craft a YAML with `trust_tier: trusted` on a new node; verify the node imports successfully but its recorded trust tier is `untrusted`; verify the audit log entry notes the override.
 - Concurrent edit test: two admin sessions edit the same node; verify the second save shows a conflict diff and requires manual merge.

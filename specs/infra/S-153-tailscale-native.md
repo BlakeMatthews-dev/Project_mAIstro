@@ -220,6 +220,7 @@ None of these are deletions — they're substrate-conditional defaults:
 - [ ] On NetBird with mesh-only access: dashboard reachable via NetBird MagicDNS within 60s of OIDC sign-in; admin/user1 mapping works against the configured IdP
 - [ ] On NetBird with public Reverse Proxy: custom domain serves the dashboard with auto-issued LE cert and OIDC auth at the edge; non-OIDC-authenticated requests refused before reaching the conductor
 - [ ] On ZeroTier: dashboard reachable on ZT IP; admin authenticates via S-149 keypair challenge; non-ZT-member machines cannot connect
+- [ ] ZeroTier identity enforcement: a ZeroTier-network member with a valid ZT IP but without a valid S-149 challenge-response receives `401 Unauthorized` from the conductor; presenting a valid ZT network address alone is not sufficient for any access level (admin or user); the challenge-response signature is verified against the configured admin/user public keys before any request proceeds
 - [ ] On Cloudflare Tunnel: dashboard reachable via operator's hostname; identity flows from CF Access headers when configured
 - [ ] On LAN-mDNS: dashboard reachable at `<instance>.local`; admin authenticates via S-149 keypair challenge
 - [ ] On localhost-only: dashboard reachable on `127.0.0.1`; admin authenticated via Unix socket peer credentials
@@ -245,6 +246,7 @@ None of these are deletions — they're substrate-conditional defaults:
 - Fresh install with substrate = NetBird, mesh-only: dashboard accessible after OIDC sign-in; admin/user1 mapping resolves against the configured IdP's group claims.
 - Fresh install with substrate = NetBird, with Reverse Proxy: custom-domain dashboard reachable from public internet; OIDC auth gate enforced before the conductor sees the request; auto-LE cert valid.
 - Fresh install with substrate = ZeroTier: dashboard accessible at the conductor's ZT IP from another ZT member; admin proves identity by signing a challenge with the S-149 `m/0'` key; non-ZT-member machine cannot reach the conductor.
+- ZeroTier identity enforcement: join the ZT network from a second machine (valid ZT IP) but do NOT complete the S-149 challenge-response; verify the conductor returns `401 Unauthorized`. Then complete the challenge with the correct private key; verify the request succeeds. Then attempt to replay a previously captured valid challenge-response on a fresh request; verify it is rejected (replay protection).
 - Fresh install with substrate = Cloudflare Tunnel: dashboard accessible via configured hostname; CF Access JWT validated; operator without CF Access bypassed (with explicit admin warning).
 - Fresh install with substrate = LAN-only: `<instance>.local` reachable from same LAN; admin proves identity by signing a challenge with the S-149 `m/0'` key.
 - Fresh install with substrate = localhost-only: dashboard at `127.0.0.1`; remote browsers refused at the socket layer.

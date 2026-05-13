@@ -80,7 +80,7 @@ Every install verifies:
 
 A failure at any step blocks the install. Unsigned plugins require explicit `medley install --allow-unsigned <name>` *plus* an admin signature (S-142).
 
-Revoked publisher VCs propagate via the publisher's DID document; conductors check on each install attempt and can be configured to re-check daily for already-installed plugins.
+Revoked publisher VCs propagate via the publisher's DID document; conductors re-check on each install/update attempt (default) and can opt into a daily background re-check for already-installed plugins.
 
 ## Acceptance Criteria
 
@@ -89,7 +89,7 @@ Revoked publisher VCs propagate via the publisher's DID document; conductors che
 - [ ] `depends_on` plugins auto-installed transitively; conflicts reported clearly
 - [ ] Every install verifies the publisher VC against the DID document (signature + hash + revocation status)
 - [ ] Unsigned plugin install blocked unless `--allow-unsigned` + admin signature
-- [ ] Revoked publisher VC blocks future installs; periodic re-check flags compromised already-installed plugins
+- [ ] Revocation re-check on each `medley install` / `medley update` / `medley trust` invocation is the default; opt-in daily background re-check (`medley.daily_revocation_check = true`) covers plugins not recently touched; detected revocations emit a `PLUGIN_VC_REVOKED` alert to the dashboard and block further use of the plugin pending operator review
 - [ ] `medley info <name>` displays publisher DID, VC fingerprint, content hash, install date, version, trust tier
 - [ ] Lockfile is operator-readable + version-controlled (sovereignty: operator can audit what's pinned)
 
@@ -98,5 +98,5 @@ Revoked publisher VCs propagate via the publisher's DID document; conductors che
 - **Registry transport:** the registry is itself a Medley plugin (`medley install medley-registry`); operator chooses a registry endpoint (community-hosted, self-hosted, or DID-resolved).
 - **VC schema:** uses S-152's plugin-publisher VC type. JSON-LD or JWT-VC; both supported at install verifier.
 - **Content hashing:** SHA-256 of the plugin tarball; published in the VC.
-- **Revocation propagation:** publisher's DID document carries a `revokedPlugins` list; install verifier consults it. Self-revocation by the publisher requires their DID's signing key.
+- **Revocation re-check default:** on every `medley install` / `medley update` / `medley trust` invocation, the verifier re-fetches the publisher's DID document and checks for revocations. The optional daily background scan (`medley.daily_revocation_check = true`) catches revocations on plugins that haven't been recently touched; it runs as a `wall-clock-tick:1d` event on the reactor (S-143) and posts any `PLUGIN_VC_REVOKED` events to the dashboard.
 - **Default registry:** ships with one community-curated registry pinned by content hash; operator can swap for any registry that speaks the protocol.

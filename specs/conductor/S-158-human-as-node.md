@@ -40,6 +40,10 @@ intents     = ["hr-policy", "benefits-question", "timeoff-request"]
 user_scope  = "jimmy@conductor-a"            # which initiators may delegate to her
 optimization = { enabled = true, opt_out_message = "reply STOP-LEARN to disable" }
 
+[nodes.delegation_limits]
+max_per_hour = 5   # default set during setup wizard (S-139); stored in config; tunable via Console
+max_per_day  = 20
+
 [[nodes.channels]]
 type     = "teams"
 address  = "@jenny.smith"
@@ -85,7 +89,12 @@ Five channels for Jenny, in priority order. The conductor picks the highest-prio
    Reason: intent classifier matched "hr-policy" question; Jimmy's envelope
    permits delegation to humans within his user_scope.
 
-2. Conductor selects a channel:
+2. Conductor checks rate limits:
+     - If this delegation would exceed jenny-hr's max_per_hour or max_per_day,
+       return DELEGATION_RATE_LIMIT_EXCEEDED to the requesting node (not a silent
+       drop) and abort. The requesting node is responsible for deciding whether to
+       retry later, escalate, or fall back.
+   Conductor selects a channel:
      - Filter by current time-of-day vs. each channel's `hours`
      - Filter by request urgency vs. each channel's `urgency`
      - Pick the highest-priority surviving channel
@@ -93,6 +102,10 @@ Five channels for Jenny, in priority order. The conductor picks the highest-prio
      - For "conductor": federate (S-156) to her conductor as Shape A
      - For "conductor-app": WebPush to her app
      - For email/SMS: send via the appropriate channel plugin
+   NOTE: on the first delegation to a new human node, the message includes a
+   STOP-LEARN opt-out marker ("reply STOP-LEARN to disable learning") regardless
+   of channel. The human can reply STOP-LEARN at any time on any channel to
+   disable per-human optimization.
 
 3. Reactor (S-143) registers a wait-event:
      - Event source: <channel adapter>:<delegation-id>
@@ -137,8 +150,8 @@ With opt-in (per-node `optimization.enabled = true`), Tournament Arena (S-027) t
 - **Per-human, not global**: Marcus's optimal framing is independent of Jenny's. There is no global average; each human has their own.
 
 **Privacy:**
-- Variant-performance metadata is observable info about how the human communicates. Stored in the long-term graph state (§3 of S-145). 
-- Opt-in at first delegation: the conductor's first delegation to a new human includes an opt-out marker (`reply STOP-LEARN to disable`). Disabling deletes the variant-performance state for that human.
+- Variant-performance metadata is observable info about how the human communicates. Stored in the long-term graph state (§3 of S-145).
+- Opt-in at first delegation: the conductor's first delegation to a new human includes a STOP-LEARN opt-out marker. Disabling optimization deletes the variant-performance state for that human.
 - Federated optimization: when Conductor A delegates to Jenny via Conductor B (Jenny's conductor), each conductor learns its own framing; A's variant scores are not shared with B.
 
 ### Identity attestation per channel
@@ -170,6 +183,7 @@ Operators who want a human to provide *both* authority and content can chain the
 - It does not store the response content unencrypted in the audit log without consent. Privacy-sensitive intents (HR, medical, financial) hash the response in the public VC and store cleartext only in the operator-encrypted side-channel.
 - It does not replace S-156 federation. When Jenny has her own Conductor and we route to it, that's S-156 + S-145 conductor-as-node; this spec uses it but does not redefine it.
 - It does not enable spam: a human node is a delegation target, not a destination for arbitrary outbound messages. Channel-send caps and admin-signed initial-pairing protect the human's attention.
+- It does not hardcode delegation rate limits. Default caps (`max_per_hour`, `max_per_day`) are set during the setup wizard (S-139), stored per-node in config (database / `nodes.toml`), and adjustable at any time in the Console or TUI. `DELEGATION_RATE_LIMIT_EXCEEDED` is returned to the requesting node (not a silent drop) when a cap is exceeded.
 
 ## Acceptance Criteria
 
@@ -184,6 +198,8 @@ Operators who want a human to provide *both* authority and content can chain the
 - [ ] Federation case: Conductor A delegates to Jenny via Conductor B; both conductors record the delegation; A learns its own framing without B sharing its variant scores
 - [ ] SMS / cost-bearing channels require admin signature before each delegation
 - [ ] Higher-trust intents (signing, financial) refuse lower-trust channels (email, SMS) per intent policy
+- [ ] Delegation rate limits: defaults set during setup wizard (S-139), stored per-node in config, enforced at delegation dispatch; `DELEGATION_RATE_LIMIT_EXCEEDED` returned to requesting node when a cap is hit (not a silent drop)
+- [ ] First contact: the first delegation to a new human node includes a STOP-LEARN opt-out marker in the message; `STOP-LEARN` reply on any channel disables per-human optimization and deletes variant-performance state; no pre-consent gate is required before the first message
 
 ## Implementation Notes
 
@@ -195,6 +211,7 @@ Operators who want a human to provide *both* authority and content can chain the
 - **Variant pool** lives in the per-human state row in SQLite (S-140). Schema: `(human_id, variant_id, prompts_sent, responses_received, avg_latency_ms, useful_score, thumbs_up, thumbs_down, last_used_at)`.
 - **Optimization gate** for non-opt-in humans: a single fixed framing per intent, no learning. Admin can flip the per-human flag at any time.
 - **Channel selection** is rule-based + admin-overridable: operators can pin a channel for a specific intent or a specific human via the Node Designer.
+- **Rate limit enforcement** checks `(human_id, window)` counters in SQLite before dispatching. The `max_per_hour` and `max_per_day` values are stored in the node's config row; the setup wizard writes the initial defaults and the Console TUI can update them at any time.
 - **Federation interaction:** when the human's primary channel is `conductor` (their own Maistro instance), the delegation is a S-156 federated handshake to their conductor's DID; the rest of the flow is identical, just with their conductor as the responder.
 - **Compose with S-027:** the variant pool for human nodes is registered with Tournament Arena under a separate prefix (`human:<node-id>:<intent>`) so it's distinguishable from AI-recipe variants in the dashboard.
 
@@ -210,3 +227,5 @@ Operators who want a human to provide *both* authority and content can chain the
 - Federation test: configure Jenny's primary channel as her own conductor; delegate from A; verify A talks to B's conductor over S-156; verify both conductors' audit logs reflect the delegation; verify A's optimization state is independent of B's.
 - Cost-channel guard: attempt SMS delegation without admin signature — verify refusal; with admin signature, verify success.
 - Higher-trust intent: configure `signing-approval` intent to refuse email/SMS; attempt routing via email — verify channel selection skips email and routes via conductor-app or her-own-conductor only.
+- Rate limit test: fire delegations to jenny-hr up to `max_per_hour`; verify the next attempt returns `DELEGATION_RATE_LIMIT_EXCEEDED` (not silence); verify the counter resets after the window; update `max_per_hour` via the Console and verify the new limit takes effect immediately.
+- First-contact test: add a new human node and trigger the first delegation; verify STOP-LEARN marker is present in the outbound message; verify a subsequent delegation omits the marker.
