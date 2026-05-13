@@ -142,11 +142,14 @@ LiteLLM responses pass through the Bouncer like any other tool output (S-022). A
 - [ ] BYO Anthropic / OpenAI / others is supported via paste-API-key; appears in the wizard as an explicit non-default choice
 - [ ] Bouncer screens LiteLLM responses; malicious tool-call sequences from any provider are caught
 - [ ] Adding a new free-tier provider later is a Medley plugin install, not a conductor source change
+- [ ] OAuth token expiry: when an OAuth-issued API key expires or is revoked by a provider, conductor surfaces a `PROVIDER_AUTH_EXPIRED` alert on the dashboard naming the provider and offering a one-click re-authentication link; LiteLLM routing automatically excludes the expired provider and falls back to remaining configured providers immediately — expired credentials are not silently retried until they begin generating 401 errors
+- [ ] Privacy disclosure: the setup wizard explicitly surfaces a "free providers may train on your prompts" warning before storing any external API keys; the warning includes a link to each selected provider's privacy policy; sovereignty mode (local-only) is presented as a clear alternative in the same screen
 
 ## Implementation Notes
 
 - **LiteLLM as router:** preferred over rolling our own. LiteLLM already handles 100+ providers with consistent params; we layer routing strategy + vault integration on top.
 - **OAuth library:** standard OAuth 2.0 / OIDC flow per provider; use `authlib` or `oauth2-client` for the Console-side flow. Provider OAuth scopes are `litellm:read` / `litellm:write` equivalent where supported; minimum needed.
+- **OAuth token refresh:** for providers that issue short-lived OAuth tokens, store the refresh token in the vault alongside the access token. A background task checks expiry 5 minutes ahead and refreshes; on refresh failure (revocation, expired refresh token), `PROVIDER_AUTH_EXPIRED` is posted to the dashboard.
 - **Cloudflare deep-link:** Cloudflare doesn't expose OAuth for Workers AI tokens at API level today; the deep-link to https://dash.cloudflare.com/profile/api-tokens with a pre-filled template is the cleanest UX. Console waits for the user to paste back, then verifies by calling the Workers AI endpoint with the token.
 - **Provider list updates:** the default-provider list lives in `~/.conductor/litellm-defaults.yaml`, shipped with each conductor release. Operators can override; updates land via the conductor update channel.
 - **Quota tracking:** LiteLLM's per-provider request counters expose enough to build the widget; values are also persisted to SQLite (S-140) so usage survives reboots.
@@ -162,4 +165,6 @@ LiteLLM responses pass through the Bouncer like any other tool output (S-022). A
 - Rate-limit drill: artificially exhaust Groq's quota → router falls back to Cerebras → then Cloudflare → then OpenRouter; verify each transition in Langfuse traces.
 - Vault leakage test: grep `~/.conductor/litellm.yaml` for known API key prefixes → zero matches; verify keys are only in `secrets.age`.
 - Bouncer drill: LiteLLM mock returns a known prompt-injection payload → Bouncer rejects → agent loop never sees it.
+- OAuth expiry test: simulate a revoked Groq OAuth token (set expiry to now); verify `PROVIDER_AUTH_EXPIRED` dashboard alert appears within 60s; verify routing falls back to Cerebras / OpenRouter immediately without 401 errors; re-authenticate; verify Groq re-enters the routing pool.
+- Privacy disclosure: walk through wizard with all four defaults selected; verify warning appears before `[Continue]` is enabled; verify each provider's privacy policy link resolves.
 - Provider addition: install a hypothetical `medley install litellm-fireworks` plugin → Fireworks appears as a routable provider without conductor source changes.
