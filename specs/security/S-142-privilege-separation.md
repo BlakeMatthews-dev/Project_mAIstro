@@ -133,6 +133,7 @@ The file is admin-signed (each entry has a signature from the admin keypair). Mu
 - [ ] Audit log records every elevation (granted, declined, expired, revoked) as a signed VC (S-152)
 - [ ] Heartbeat / reactor-spawned tasks (S-143) run as a specific user, not as admin; verified by trace inspection
 - [ ] Federation peers (S-156) cannot impersonate admin; cross-conductor admin-only operations require local-admin signature
+- [ ] Admin key rotation invalidates all active elevation grants: when the admin rotates their `m/0'` keypair (S-149), all active time-boxed delegation scopes and policy VCs are revoked atomically; subsequent requests citing a grant signed by the previous key are rejected with `GRANT_KEY_MISMATCH`; no manual per-grant revocation is required after rotation
 
 ## Implementation Notes
 
@@ -143,6 +144,7 @@ The file is admin-signed (each entry has a signature from the admin keypair). Mu
 - **No "sudo timestamp":** time-boxed delegation is opt-in per scope, signed, and recorded. There is no implicit "admin signed in the last 5 minutes so we'll let this slide" — every elevation is structured.
 - **Composition with S-141 vault:** vault mutations require admin signature; user-keyed AgentSpecs can read via `secrets.use()` only for credentials the admin has granted them via policy VC.
 - **Daily-driver UX:** admin should be able to grant common time-boxed scopes from the Console with one tap ("15-min file edit window for user1") to reduce friction without compromising the structural property.
+- **Grant invalidation on key rotation:** each active grant (time-boxed scope + policy VC) stores the admin public key that signed it. On startup and on key rotation, conductor validates all active grants against the current `admin.pub`; any grant signed by a different key is revoked atomically and logged. This ensures a stolen-device recovery does not leave any pre-rotation grants valid.
 
 ## Verification
 
@@ -152,4 +154,4 @@ The file is admin-signed (each entry has a signature from the admin keypair). Mu
 - Elevation round-trip test: user requests file_ops.delete; admin's mobile wallet receives push within 5s; signs; operation proceeds; verify audit-log VC.
 - Time-boxed scope test: admin grants 15-min file-ops scope to user1; user1 operates 14 min without prompts; at min 16 next operation requires a fresh elevation.
 - Heartbeat test: reactor-spawned task triggers; verify trace shows user identity, not admin; verify the task cannot perform admin-only operations.
-- Stolen-device drill: assume admin's wallet device is compromised; admin uses the recovery seed to rotate the m/0' key; verify previous elevation grants do not persist past the rotation.
+- Stolen-device drill: assume admin's wallet device is compromised; admin uses the recovery seed to rotate the m/0' key; verify all existing time-boxed scopes and policy VCs are revoked atomically; verify that presenting a previous grant signature returns `GRANT_KEY_MISMATCH`; verify new elevation requests with the new key work normally.
