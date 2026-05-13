@@ -152,7 +152,11 @@ The chain also carries an **acting-via** provenance (the conductors / nodes the 
 - **Latency budget** (default 60s) — cumulative chain wall-clock.
 - **Token-spend budget** (default 1M tokens) — cumulative LLM tokens across the chain.
 
-When a budget is exhausted, the conductor whose budget it crossed fails the operation with a structured error. **Recursion is an inefficiency smell, not a safety failure.** Operators get observability ("this chain went 6 deep, took 14s") rather than the runtime guessing whether their composition is "valid." Budgets are tunable per-conductor and per-skill.
+When a budget is exhausted, the conductor whose budget it crossed fails the operation with a structured error.
+
+**Cross-conductor token-spend tracking:** when Conductor A calls Conductor B via federation (S-156), B's response includes a `tokens_consumed` field reporting the LLM tokens B charged for that turn (including any nested calls B made). A debits this amount from the chain's token-spend budget before the next node runs. When a peer omits `tokens_consumed` (older protocol or non-Maistro responder), A applies a conservative estimate: `ceil(len(response_text) / 4)` tokens. Per-hop spend is visible in the Dashboard Intel chain view, so operators can identify which nodes in a deep chain are burning budget.
+
+**Recursion is an inefficiency smell, not a safety failure.** Operators get observability ("this chain went 6 deep, took 14s") rather than the runtime guessing whether their composition is "valid." Budgets are tunable per-conductor and per-skill.
 
 Deeper treatment of recursive composition (audit-log nesting, `parentVC` references, family / specialization / privacy-partitioning patterns) lives in **S-157: Conductor-as-node composition**.
 
@@ -168,6 +172,7 @@ Deeper treatment of recursive composition (audit-log nesting, `parentVC` referen
 - [ ] Initiator identity propagates correctly through chains; verified by audit-log inspection (every VC in a chain has the same `initiator` field)
 - [ ] Recursion: a deliberately recursive A→B→A composition completes within budgets; an unbounded version fails at budget exhaustion with a structured error, not at handshake
 - [ ] Test: a malicious imported agent (or a malicious human response) cannot escape its capability envelope (verified by adversarial test)
+- [ ] Cross-conductor token spend: B's federation response includes `tokens_consumed`; A debits the amount against the chain budget before proceeding; missing field triggers the conservative `ceil(len(response) / 4)` estimate; per-hop spend visible in the chain audit log
 
 ## Implementation Notes
 
@@ -178,6 +183,7 @@ Deeper treatment of recursive composition (audit-log nesting, `parentVC` referen
 - **No edges without a node target.** A federation message that arrives without a target node spec ("unknown intent") is rejected at the Bouncer; it cannot create a phantom invocation.
 - **Initiator identity is checked at every conductor boundary.** A request crossing into another conductor whose `users.toml` doesn't recognize the initiator is refused.
 - **Per-chain budgets are enforced at the conductor whose resource is being consumed.** Token budget enforced at the conductor making the LLM call; latency budget at the wrapping conductor; depth budget at every layer.
+- **`tokens_consumed` in federation responses** is a required field in the Maistro federation protocol (S-156). The conservative estimate (`ceil(len / 4)`) applies to any responder that does not include the field; this is an overestimate by design, incentivizing peers to report accurately.
 
 ## Verification
 
@@ -188,4 +194,5 @@ Deeper treatment of recursive composition (audit-log nesting, `parentVC` referen
 - Wrap an AutoGen multi-agent system as Shape B; have it call Claude Code as Shape A inside; have one of the Claude Code calls delegate to a human via S-158 — verify the chain completes, every layer's audit log records the appropriate VC with the same `initiator` (the original user), and total chain latency is within budget.
 - Adversarial test: imported agent attempts to call a tool not in its whitelist → attempt is refused at the capability envelope, not at the tool implementation.
 - Recursion test: deliberate A→B→C→A chain completes within depth budget 16; deliberate unbounded loop hits the budget and returns a structured error from the conductor whose budget was crossed.
+- Token-spend tracking test: conductor A calls federation peer B for a task; verify B's response carries `tokens_consumed`; verify A's chain-budget ledger reflects B's cost; configure a federation peer that omits the field and verify A applies the conservative estimate.
 - Long-term: enumerate every code path that mutates long-term graph state; verify each maps to exactly one subsystem in the §4 list.
