@@ -1,16 +1,22 @@
 ---
-id: S-156
+id: SPEC-018
 title: "Lightning-native federation — conductor friends, paid messaging, payment-graph reputation"
-domain: security
-status: draft
-priority: P2
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-updated: 2026-05-13
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Orchestration
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-156: Lightning-Native Federation

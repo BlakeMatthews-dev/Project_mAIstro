@@ -1,15 +1,22 @@
 ---
-id: S-158
+id: SPEC-019
 title: "Human-as-node delegation — channel-routed prompts, identity-attested replies, per-human prompt optimization"
-domain: conductor
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Agents
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-158: Human-as-Node Delegation

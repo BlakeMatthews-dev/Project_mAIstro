@@ -1,15 +1,22 @@
 ---
-id: S-159
+id: SPEC-020
 title: "Node Designer + Graph Designer UI — visual composition of the hyperagent graph"
-domain: infra
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: UserClient
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-159: Node Designer + Graph Designer UI
@@ -123,7 +130,7 @@ Form validates client-side AND server-side. Submission is blocked unless:
 Save is admin-signed (S-142). The Console produces a wallet-app push notification (S-150 mode 3) with the structured node-definition diff:
 
 ```
-┌─ Add node: jenny-hr (human) ───────────────────┐
+┌─ Add node: jenny-hr (human) ──────────────────────────┐
 │ Channels:                                            │
 │   1. Teams @jenny.smith                              │
 │   2. Conductor did:web:jenny-conductor.her-tailnet... │
@@ -134,7 +141,7 @@ Save is admin-signed (S-142). The Console produces a wallet-app push notificatio
 │        not actions)                                   │
 │ Optimization: enabled, opt-out="STOP-LEARN"           │
 │ [ Sign in wallet → ]                                  │
-└──────────────────────────────────────────────────┘
+└──────────────────────────────────────────────┘
 ```
 
 On admin signature, the node is added to the runtime registry, a VC is recorded in the audit log, and the change is reflected on the Graph Designer canvas immediately.
@@ -152,25 +159,25 @@ A visual canvas showing nodes and edges. React Flow (or equivalent) for the rend
 │         │                                                              │
 │         ▼                                                              │
 │    ┌───────────┐                                                  │
-│    │ Bouncer  │ ───────→ [reject → SAFETY_VIOLATION]                  │
-│    └────┬──────┘                                                  │
+│    │ Bouncer  │ ───────▶ [reject → SAFETY_VIOLATION]                  │
+│    └────┴──────┘                                                  │
 │         │                                                              │
 │         ▼                                                              │
 │    ┌───────────────┐    ┌───────────┐                              │
 │    │ Intent       │ ───▶ │ ARTIFACT  │    → file_ops.write          │
 │    │ Classifier   │    └───────────┘                              │
-│    └────┬──────────┘    ┌─────────────────┐                       │
-│         │ hr-policy ──→ │ jenny-hr (human) │ ──→ [returns answer]    │
+│    └────┴──────────┘    ┌─────────────────┐                       │
+│         │ hr-policy ──▶ │ jenny-hr (human) │ ─→ [returns answer]    │
 │         │             └─────────────────┘                       │
 │         │             ┌─────────────────┐                       │
-│         └─ code ──────→ │ builders-graph  │ ──→ [code output]      │
+│         └─ code ──────▶ │ builders-graph  │ ─→ [code output]      │
 │                       └─────────────────┘                       │
 │                                                                       │
 │  Live traffic: ●●●●○○○ (last 10 min)                                  │
 │  Self-improvement events: 3 in last hour (Bouncer pattern + ELO + ...) │
 │                                                                       │
 │  [+ Add node]  [Save graph]  [Export]  [Replay last 1h]               │
-└─────────────────────────────────────────────────────────────────────────────│
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 #### Capabilities

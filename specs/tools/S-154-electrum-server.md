@@ -1,15 +1,22 @@
 ---
-id: S-154
+id: SPEC-017
 title: "Electrum server — Medley plugin for household-private Bitcoin backend"
-domain: tools
-status: draft
-priority: P2
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Tools
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-154: Electrum Server Plugin

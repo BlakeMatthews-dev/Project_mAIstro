@@ -1,15 +1,22 @@
 ---
-id: S-153
+id: SPEC-016
 title: "Networking & identity substrate — Tailscale recommended, mesh substrates pluggable"
-domain: infra
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Foundation
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-153: Networking & Identity Substrate
