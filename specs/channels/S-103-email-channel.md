@@ -1,16 +1,26 @@
 ---
-id: S-103
+id: SPEC-002
 title: "Email channel — conductor@emeraldfam.org"
-domain: channels
-status: draft
-priority: P2
-effort: "~600 lines"
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-03-23
-updated: 2026-05-13
-completed: ""
-owner: conductor
-commits: []
-depends_on: [S-022, S-141, S-143, S-007]
+substrate: []
+implements: []
+related:
+  - Project_mAIstro#SPEC-001
+  - Project_mAIstro#SPEC-011
+  - Project_mAIstro#SPEC-013
+  - Project_mAIstro#S-007
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Orchestration
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-103: Email Channel

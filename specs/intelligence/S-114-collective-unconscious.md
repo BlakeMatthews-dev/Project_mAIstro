@@ -1,14 +1,22 @@
 ---
-id: S-114
+id: SPEC-007
 title: "Collective Unconscious — federated wisdom sharing"
-domain: intelligence
-status: research
-priority: P3
-effort: "~400 lines"
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-03-23
-completed: ""
-owner: conductor
-commits: []
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Memory
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-114: Collective Unconscious

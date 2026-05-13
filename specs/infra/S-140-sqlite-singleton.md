@@ -1,15 +1,22 @@
 ---
-id: S-140
+id: SPEC-010
 title: "SQLite singleton writer — the invariant that protects state under the reactor"
-domain: infra
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Foundation
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-140: SQLite Singleton Writer

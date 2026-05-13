@@ -1,14 +1,22 @@
 ---
-id: S-109
+id: SPEC-003
 title: "Secrets migration — move plaintext secrets to the vault backend"
-domain: security
-status: draft
-priority: P1
-effort: "2 hours"
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-03-23
-completed: ""
-owner: conductor
-commits: []
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Foundation
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-109: Secrets Migration

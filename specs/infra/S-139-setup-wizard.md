@@ -1,15 +1,22 @@
 ---
-id: S-139
+id: SPEC-009
 title: "Setup wizard — browser-first install ceremony, CLI fallback, shares Console codebase"
-domain: infra
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: UserClient
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-139: Setup Wizard

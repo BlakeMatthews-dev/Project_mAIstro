@@ -1,15 +1,23 @@
 ---
-id: S-111
+id: SPEC-005
 title: "Medley full — publish, versions, signed VC trust chain, dependency resolution"
-domain: tools
-status: draft
-priority: P2
-effort: "~300 lines"
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-03-23
-completed: ""
-owner: conductor
-commits: []
-supersedes: "S-037 (extends Medley basics)"
+substrate: []
+implements: []
+related: []
+supersedes:
+  - Project_mAIstro#S-037
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Tools
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-111: Medley full

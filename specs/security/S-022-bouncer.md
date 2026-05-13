@@ -1,14 +1,24 @@
 ---
-id: S-022
+id: SPEC-001
 title: "Bouncer — security screening (20+ regex + LLM)"
-domain: security
-status: done
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Implemented
 created: 2026-02-25
-completed: 2026-03-23
-owner: conductor
-commits: [259bf0b]
+accepted: 2026-02-25
+implemented: 2026-03-23
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Governance
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-022: Bouncer

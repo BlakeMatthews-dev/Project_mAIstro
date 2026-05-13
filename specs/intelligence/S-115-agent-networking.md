@@ -1,14 +1,22 @@
 ---
-id: S-115
+id: SPEC-008
 title: "Agent-to-agent networking"
-domain: intelligence
-status: research
-priority: P3
-effort: "~500 lines"
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-03-23
-completed: ""
-owner: conductor
-commits: []
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Orchestration
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-115: Agent-to-agent networking

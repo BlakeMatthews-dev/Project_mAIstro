@@ -1,14 +1,22 @@
 ---
-id: S-113
+id: SPEC-006
 title: "Stress Rehearsal — controlled chaos testing"
-domain: tools
-status: draft
-priority: P2
-effort: "~250 lines"
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-03-23
-completed: ""
-owner: conductor
-commits: []
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Reliability
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-113: Stress Rehearsal
