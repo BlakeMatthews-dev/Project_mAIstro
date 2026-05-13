@@ -121,6 +121,26 @@ Fresh install of Bitcoin Core pruned-mode is ~6-12 hours of sync depending on co
 - Optional: pre-sync snapshot import from a trusted source (Casa, Mempool.space) cuts the sync to ~30 min. Trade-off: the operator trusts the snapshot publisher; documented but not default.
 - Conductor's wallet (S-151) operates in lightweight mode using a public Electrum endpoint until local sync completes, then automatically migrates to the local server. Migration is a config flip; admin-signed.
 
+### Update semantics
+
+`medley update electrum-server` must not silently break wallet operations or corrupt chain state:
+
+1. The conductor's wallet automatically falls back to the public Electrum endpoint at update start (same lightweight-mode fallback as initial sync).
+2. electrs is stopped first (it depends on bitcoind).
+3. bitcoind is stopped; binaries are replaced; checksums verified against the new plugin VC (S-111).
+4. bitcoind is restarted and allowed to reach chain tip before electrs is started.
+5. Once electrs is indexed, the conductor's wallet migrates back to localhost; admin-signed.
+
+Rollback: if any step fails, the old binaries are restored from the plugin's version cache and services restarted on the previous version. The update failure is posted to the board.
+
+### Chain data backup policy
+
+The Bitcoin Core state and electrs index (up to 60 GB) are **not** included in vault backup (`maistro vault export`, S-141) — they are too large and fully re-syncable from the network. Operators should be aware:
+
+- **What requires backup:** only the vault-stored RPC credentials and TLS material (already covered by `maistro vault export`).
+- **Recovery from data loss:** delete `$PLUGIN_DIR/bitcoin` and `$PLUGIN_DIR/electrs-db`, restart the plugin, and re-sync (~6-12 hours). Lightning channel state is held by the Lightning plugin (S-151), not this plugin.
+- `medley info electrum-server` surfaces this policy explicitly so operators are not surprised.
+
 ### What this plugin does NOT do
 
 - Not a full archival node by default (pruning is on). Operator can disable pruning for full archival (~700GB) via plugin config.
@@ -142,6 +162,9 @@ Fresh install of Bitcoin Core pruned-mode is ~6-12 hours of sync depending on co
 - [ ] Resource caps (memory, bandwidth) are enforced via the substrate's per-plugin sandboxing (S-148 container path) or systemd cgroups (S-147 native path)
 - [ ] Phantom Execution (S-030) verifies plugin behavior on signet before mainnet promotion
 - [ ] Pre-sync snapshot import is offered as an option with explicit "trust this publisher" gate
+- [ ] `medley update electrum-server` follows the ordered stop/update/restart sequence; wallet falls back to public endpoint during the update window; failed update rolls back to previous binaries and posts to board
+- [ ] Chain data backup policy is documented in `medley info electrum-server`: chain data is NOT vault-backed; re-sync is the recovery path; only vault credentials require backup
+- [ ] Port conflict detection: if the configured Electrum TLS port (default 50002) is already in use at install time, the install fails with a clear error message and directs the operator to set `electrum_rpc_tls_port` in plugin config
 
 ## Implementation Notes
 
@@ -164,3 +187,5 @@ Fresh install of Bitcoin Core pruned-mode is ~6-12 hours of sync depending on co
 - Restart test: reboot the conductor host; bitcoind and electrs come back; first wallet query within 30s succeeds.
 - Snapshot test: install with `--snapshot mempool.space` → sync to chaintip in <30 min; verify chain head matches a public block explorer.
 - Phantom test: a new bitcoin-touching plugin installed alongside electrum-server runs against signet via the local server before mainnet promotion.
+- Update test: run `medley update electrum-server`; verify wallet falls back to public endpoint during update; verify services restart cleanly; verify wallet migrates back to local.
+- Port conflict test: bind port 50002 before installing; verify install fails with a clear port-conflict error.
