@@ -1,16 +1,22 @@
 ---
-id: S-141
+id: SPEC-011
 title: "Secrets vault — age-encrypted file unlocked by admin keypair"
-domain: security
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-updated: 2026-05-13
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Foundation
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-141: Secrets Vault

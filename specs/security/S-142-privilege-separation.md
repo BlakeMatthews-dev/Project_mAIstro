@@ -1,15 +1,22 @@
 ---
-id: S-142
+id: SPEC-012
 title: "Admin / user1 privilege separation — mandatory two-tier model"
-domain: security
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Governance
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-142: Admin / user1 Privilege Separation

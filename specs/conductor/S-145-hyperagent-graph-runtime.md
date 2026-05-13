@@ -1,15 +1,22 @@
 ---
-id: S-145
+id: SPEC-015
 title: "Hyperagent Graph Runtime — the conductor is a self-improving graph of AgentSpec nodes"
-domain: conductor
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Orchestration
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-145: Hyperagent Graph Runtime

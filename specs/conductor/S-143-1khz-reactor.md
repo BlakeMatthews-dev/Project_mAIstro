@@ -1,15 +1,23 @@
 ---
-id: S-143
+id: SPEC-013
 title: "1kHz reactor loop — event-driven runtime, replaces 30-min heartbeat"
-domain: conductor
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: "S-001 (heartbeat becomes a degenerate event source on the reactor)"
+substrate: []
+implements: []
+related: []
+supersedes:
+  - Project_mAIstro#S-001
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Orchestration
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-143: 1kHz Reactor Loop

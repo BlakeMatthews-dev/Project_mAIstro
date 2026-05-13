@@ -1,15 +1,22 @@
 ---
-id: S-144
+id: SPEC-014
 title: "LiteLLM free-tier auto-configuration — OAuth-first onboarding for the LLM hook"
-domain: infra
-status: draft
-priority: P1
-effort: ""
+repo: Project_mAIstro
+kind: spec
+status: Proposed
 created: 2026-04-25
-completed: ""
-owner: conductor
-commits: []
-supersedes: ""
+substrate: []
+implements: []
+related: []
+supersedes: []
+blocks: []
+blocked-by: []
+contracts:
+  - behavioral
+tests: []
+layer: Agents
+owners:
+  - '@BlakeMatthews-dev'
 ---
 
 # S-144: LiteLLM Free-Tier Auto-Configuration
