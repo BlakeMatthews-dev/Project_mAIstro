@@ -90,6 +90,8 @@ WAL files are checkpointed periodically (every N seconds or M MiB, whichever fir
 - [ ] Concurrent reads from many subsystems + Console + external `sqlite3` CLI work without contention while the writer is active
 - [ ] WAL checkpoint runs periodically; database file does not grow unboundedly
 - [ ] Conductor crash: SQLite state remains consistent; in-flight queue entries are lost (documented; subsystems that need durability journal first)
+- [ ] State database backups are encrypted with the admin keypair (S-141-style age encryption) before writing to disk; no plaintext copy of `state.db` is ever written to `~/.conductor/backups/`; backup files use the `.db.age` suffix and are importable via `maistro db restore`
+- [ ] Schema migrations run atomically at startup; a failed migration rolls back completely and conductor refuses to start with a `MIGRATION_FAILED` error naming the failing migration; conductor never starts with a partially-migrated schema
 - [ ] Migration path to libSQL / Turso documented (drop-in upgrade for replication)
 
 ## Implementation Notes
@@ -97,7 +99,7 @@ WAL files are checkpointed periodically (every N seconds or M MiB, whichever fir
 - **Language:** if conductor is Rust, use `rusqlite` with the `bundled` feature for a stable SQLite version. If Python, use `sqlite3` (stdlib) wrapped in a single asyncio task.
 - **sqlite-vec extension:** loaded into the writer connection at startup; reader connections also load it for vector queries.
 - **External tooling:** `sqlite3 ~/.conductor/state.db` works for read-only inspection because of WAL mode. Documented for operators.
-- **Backups:** use SQLite's online-backup API (`VACUUM INTO`) on a schedule. Backups live in `~/.conductor/backups/state-<timestamp>.db.age` (encrypted with admin keypair, S-141-style).
+- **Backups:** use SQLite's online-backup API (`VACUUM INTO`) on a schedule. Backups live in `~/.conductor/backups/state-<timestamp>.db.age` (encrypted with admin keypair, S-141-style). The plaintext intermediate (`VACUUM INTO` target) is age-encrypted in the same atomic step and the plaintext file deleted; this means the plaintext database is briefly on disk only during the backup window — documented as the accepted trade-off.
 - **Schema migrations:** atomic, version-stamped, run by the singleton at startup. Failed migrations roll back; conductor refuses to start if migration cannot complete.
 - **Profiling:** the writer thread emits per-transaction latency metrics to Langfuse; outliers (>100ms) are flagged.
 
@@ -108,4 +110,5 @@ WAL files are checkpointed periodically (every N seconds or M MiB, whichever fir
 - CI gate: introduce a `sqlite3.connect("...", isolation_level=None)` outside the singleton in a test branch → build fails with the gate's message.
 - Crash test: kill -9 the conductor mid-write → restart → verify SQLite state is consistent and the conductor recovers.
 - Concurrent reader test: 50 simultaneous read connections from Console + 5 subsystems while writer runs → no errors, no notable latency degradation.
-- Backup test: trigger online backup; verify the resulting file decrypts with admin keypair and opens cleanly with `sqlite3`.
+- Backup test: trigger online backup; verify the resulting `.db.age` file requires the admin keypair to decrypt; verify no unencrypted `.db` remains after the backup completes; verify the decrypted file opens cleanly with `sqlite3`.
+- Migration failure test: introduce a deliberately broken migration; attempt to start conductor; verify `MIGRATION_FAILED` error with the migration name, conductor exits, database is unchanged.
