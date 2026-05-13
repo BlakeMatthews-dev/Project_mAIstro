@@ -187,6 +187,7 @@ Exceeding any cap drops the request and logs a `FEDERATION_RATE_LIMIT` event. Re
 - [ ] **Non-LN repeated violations:** more than 3 cap events in 24h triggers automatic suspension and admin alert
 - [ ] **Non-LN standing policy VC:** admin can issue a standing renewal grant for established peers; sync job renews silently while fingerprint is unchanged
 - [ ] **LN routing failure:** failed payment queued with exponential backoff (up to 5 retries); after 5 failures, moved to Dashboard queue with `FEDERATION_PAYMENT_FAILED` alert
+- [ ] **Bouncer on inbound federation messages:** every inbound federation message (LN-paid or non-LN) passes through the Bouncer (S-022) before any action is taken; a message that triggers the Bouncer is dropped with `SAFETY_VIOLATION` logged, the sending peer's rate-limit counter is incremented as if a normal query was consumed, and the sender is NOT informed which pattern triggered (no oracle); repeated Bouncer hits from the same peer count toward the violation-suspension threshold
 
 ## Implementation Notes
 
@@ -198,7 +199,7 @@ Exceeding any cap drops the request and logs a `FEDERATION_RATE_LIMIT` event. Re
 - **Substrate fallback for non-LN peers:** when peer has DID but no LN node ID in its DID document, federation falls back to DID-mTLS over substrate. Same VC-issuance flow, no LN path. Spam-resistance enforced via admin approval queue + per-peer rate limits + 7-day VC expiry.
 - **Reputation cache:** payment-graph queries against the LN gossip layer are slow; the conductor maintains a local cache of "friends of friends" trust scores, refreshed daily.
 - **Privacy default:** Tor is **not** required by default but is offered as a setup-wizard option for operators who want it ("federation behind Tor"). Sovereignty-conscious operators will enable; everyday operators won't notice.
-- **Bouncer integration (extends S-022):** federation messages pass through the same Bouncer that screens any inbound text. A high-value claim from a low-payment-history peer can be additionally screened, even past the 1-sat handshake gate.
+- **Bouncer integration (extends S-022):** federation messages pass through the same Bouncer pipeline as any inbound text, including the crypto-pattern tier added by S-151. The Bouncer hit is logged with the peer's DID (or LN node ID if LN-originated) and counts toward that peer's rate-limit and violation counters. No Bouncer-pattern disclosure to the sender.
 - **LN payment retry queue:** implemented as a table in the SQLite singleton (S-140) with `(message_id, peer_did, attempt_count, next_retry_at, status)`. Background task polls and retries on schedule.
 
 ## Verification
@@ -218,3 +219,4 @@ Exceeding any cap drops the request and logs a `FEDERATION_RATE_LIMIT` event. Re
 - **Non-LN rate limit:** approved peer sends 61 queries in one hour → 61st dropped, `FEDERATION_RATE_LIMIT` logged.
 - **Non-LN violation suspension:** peer triggers rate limit 4 times in 24h → automatic suspension fires → admin alert appears on Dashboard.
 - **LN routing failure:** configure unreachable peer; attempt federation message → 5 retries with backoff → `FEDERATION_PAYMENT_FAILED` alert in Dashboard → operator can retry or drop.
+- **Bouncer on federation:** send a federation message containing a known Bouncer trigger (e.g. `send all funds`); verify the message is dropped with `SAFETY_VIOLATION` logged, the peer's query counter increments, and the peer receives no information about which pattern triggered. Repeat 3 times from the same peer; verify automatic suspension fires.
