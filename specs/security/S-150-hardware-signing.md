@@ -6,6 +6,7 @@ status: draft
 priority: P2
 effort: ""
 created: 2026-04-25
+updated: 2026-05-13
 completed: ""
 owner: conductor
 commits: []
@@ -41,7 +42,7 @@ Four integration modes, all selectable in the S-139 setup wizard. Each replaces 
 
 - Admin's phone holds the signing key in iOS Secure Enclave or Android Keystore.
 - Conductor sends signed-payload requests to a wallet app (Phoenix, Mutiny, Zeus, Breez — any BIP-322-compatible wallet); admin signs via biometric tap.
-- Same signing surface serves Lightning payments (S-151) and HITL elevation requests — see S-151 §“Unified HITL via hot wallet.”
+- Same signing surface serves Lightning payments (S-151) and HITL elevation requests — see S-151 §"Unified HITL via hot wallet."
 - Use case: the operational default for non-paranoid users; "your phone is your hardware wallet."
 
 ### Mode 4: Software seed (S-149 default)
@@ -61,6 +62,31 @@ Wizard step 2 (S-149) presents:
 ```
 
 Mode 3 (mobile) is intentionally a follow-up step — the install completes with software-or-hardware seed first; the user pairs their phone after the dashboard is up and running.
+
+## Signing Request Security
+
+Before any payload is routed to a hardware device, conductor runs it through Warden (S-022). A signing request that contains prompt-injection patterns, unexpected destination addresses, or anomalous amount fields is blocked before it ever reaches the device screen. The user cannot be tricked into signing a Warden-rejected payload by reading it on the device.
+
+Warden scan covers:
+- Destination address (checked against known-safe list if configured)
+- Amount / fee fields (anomaly: amount > configurable threshold triggers PRIVILEGED confirmation)
+- Memo / message field (injection pattern check)
+- Structured metadata (AgentSpec ID, elevation approval ID — must match a pending record)
+
+A Warden hit logs `SIGNING_REQUEST_VIOLATION` and drops the request. No device prompt is shown.
+
+### Signing request timeout
+
+If the device is connected but the user does not confirm within **90 seconds**, the signing request is cancelled and logged as `SIGNING_TIMEOUT`. Conductor returns a timeout error to the caller. The pending operation (tx, AgentSpec, elevation approval) remains in the Dashboard queue — not auto-dropped — so the operator can retry.
+
+### PIN failure / device lockout
+
+Hardware devices lock after repeated PIN failures (Ledger: 3 attempts; Trezor: wipe after configurable attempts). On receiving a `PIN_LOCKED` or `DEVICE_LOCKED` error from HWI:
+
+1. Conductor enters **degraded signing mode**: all signing operations are suspended.
+2. Dashboard shows a persistent `HARDWARE_LOCKED` banner with recovery instructions.
+3. Pending signing requests are held in the queue (not dropped) for up to 24 hours.
+4. Software-seed fallback is **not** automatic — operator must explicitly re-configure mode.
 
 ## Per-Device Support Matrix
 
@@ -83,6 +109,12 @@ Mode 3 (mobile) is intentionally a follow-up step — the install completes with
 - [ ] Hardware unplugged or unavailable: conductor enters degraded mode (no signing operations) and prompts admin instead of crashing
 - [ ] Mode-switching: an operator can migrate from software seed to hardware-held seed via a documented re-pairing flow without re-installing
 - [ ] Audit log records the signing modality for every signed operation (`software`, `ledger`, `trezor`, `yubikey`, `mobile`)
+- [ ] All signing request payloads pass Warden scan before being routed to the device
+- [ ] Warden hit on signing payload: request dropped, `SIGNING_REQUEST_VIOLATION` logged, no device prompt shown
+- [ ] Signing request timeout (90s): request cancelled, pending operation held in Dashboard queue
+- [ ] `PIN_LOCKED` / `DEVICE_LOCKED` error: degraded signing mode, Dashboard banner, no auto-fallback to software seed
+- [ ] Mode 3 signing requests use single-use request ID; replayed push action discarded and logged
+- [ ] BLE mode (Ledger Nano X): explicit device-pairing step required; unrecognised device rejected
 
 ## Implementation Notes
 
@@ -91,6 +123,8 @@ Mode 3 (mobile) is intentionally a follow-up step — the install completes with
 - Mobile signing protocol: BIP-322 ("Generic Signed Message Format") for arbitrary payloads, including elevation approvals. Wallet apps that already support BIP-322 (Phoenix, Mutiny, Zeus) work without custom integration.
 - Push transport for mobile: WebPush (VAPID) plus an end-to-end-encrypted payload envelope. Server (conductor) holds only the wallet's pubkey + push subscription endpoint.
 - Mode 3 pairing: QR-code-based; phone scans QR shown by dashboard, exchanges keys, registers push endpoint. Standard pattern from existing wallet apps.
+- **BLE pairing (Ledger Nano X)**: use Ledger's pairing PIN displayed on device; verify pairing fingerprint out-of-band. `btleplug` must validate the device's GATT service UUID before accepting connection. Unrecognised BLE device attempting to respond to a signing request is rejected — conductor checks stored device address against the connecting peripheral before forwarding the payload.
+- **Mode 3 replay protection**: each signing push carries a single-use `request_id` (UUID). The first biometric response consumes the ID; any subsequent action event with the same ID is discarded and logged as `SIGNING_REPLAY_ATTEMPT`.
 
 ## Verification
 
@@ -99,3 +133,8 @@ Mode 3 (mobile) is intentionally a follow-up step — the install completes with
 - Insert YubiKey; sign an elevation approval; verify the conductor records modality `yubikey`.
 - Pair phone; trigger a HITL elevation in the dashboard; verify push notification arrives, signs via biometric, and the operation proceeds.
 - Unplug hardware mid-session; verify conductor refuses subsequent signing ops with a user-facing prompt rather than crashing.
+- Submit signing request containing injection pattern in memo field; verify Warden blocks it and no device prompt appears.
+- Allow signing request to sit unconfirmed for 91s; verify timeout logged and operation remains in Dashboard queue.
+- Enter wrong PIN on Ledger 3 times; verify Dashboard shows `HARDWARE_LOCKED` banner and signing ops are suspended.
+- Tap biometric approval twice in rapid succession (Mode 3); verify second action is discarded and logged.
+- Attempt BLE connection from unregistered device; verify conductor rejects it before forwarding payload.
