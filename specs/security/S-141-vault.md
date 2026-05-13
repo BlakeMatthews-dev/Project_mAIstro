@@ -93,7 +93,9 @@ Import: `maistro vault import secrets.age.bak` — decrypts using the current ad
 
 ### Bouncer integration (final-line defense)
 
-The Bouncer (S-022) gets a special pattern set computed at startup: SHA-256 prefixes of every credential value in the vault. Any agent output containing one of those prefixes is rejected with `SAFETY_VIOLATION` before reaching the user or being logged.
+The Bouncer (S-022) gets a special pattern set computed at startup: the first 8 bytes (64 bits) of the SHA-256 hash of every credential value in the vault. Any agent output containing a string whose SHA-256 prefix matches any pattern is rejected with `SAFETY_VIOLATION` before reaching the user or being logged.
+
+The 8-byte prefix length is chosen to minimize false positives (collision probability ~1 in 10^19 per random 8-byte string) while ensuring the pattern set itself contains no recoverable credential material.
 
 This is the final-line defense if a credential somehow slipped through `use()` — e.g., via an upstream library that logs raw HTTP request bodies. The Bouncer catches it before the value escapes the conductor's process boundary.
 
@@ -120,7 +122,9 @@ All vault mutations require admin signature (S-142) and are recorded as VCs in t
 - [ ] Vault file `secrets.age` is encrypted to the admin's `m/0'` public key from S-149
 - [ ] Admin private key is held in OS keychain on desktop, passphrase-encrypted file on headless Linux; never on disk in cleartext
 - [ ] At startup, vault is decrypted into mlock'd process memory; private key zeroed after decryption; in-memory state zeroed on process death
-- [ ] Bouncer rejects agent output containing any vault-credential prefix (final-line defense)
+- [ ] Vault unavailability at startup: if the admin private key cannot be retrieved from the OS keychain AND the passphrase-encrypted fallback file is absent or fails to decrypt, conductor refuses to start with a `VAULT_UNAVAILABLE` error and clear recovery instructions (`maistro vault recover`); conductor never starts with an empty or partial vault — fail-closed is the only acceptable behavior
+- [ ] Bouncer rejects agent output containing any vault-credential prefix (final-line defense); the match pattern is the first 8 bytes (64 bits) of the SHA-256 hash of each credential value; prefix length is fixed and documented in the Bouncer implementation
+- [ ] Bouncer pattern set is regenerated within 100ms of any vault mutation (add, rotate, remove, rebuild)
 - [ ] Restoring the seed on a new machine reconstitutes the vault encryption key; importing a backup file restores credential values
 - [ ] Vault rebuild rotates the encryption key (advances the age recipient), zero-downtime to the running conductor
 - [ ] All vault mutations are admin-signed and recorded as VCs in the audit log
@@ -141,6 +145,7 @@ All vault mutations require admin signature (S-142) and are recorded as VCs in t
 - **Rotation grace period:** rotated credentials retain the old value for 24h tagged as `<name>.previous`; agents can opt in to fallback by passing a flag to `use`. Default: rotation is hard cutover.
 - **Composes with S-149:** the admin keypair is `m/0'` from the Conductor Seed. Lose the seed, lose the vault key. Restore the seed, restore the vault key. Lose `secrets.age` without a backup, lose the values. One backup ceremony covers the key; a second covers the values.
 - **Export encryption:** `maistro vault export --encrypted` re-encrypts to the same age recipient (admin's `m/0'` public key). The backup file is safe to store on untrusted media.
+- **Startup failure behavior:** vault unlock is attempted exactly once at startup. On failure, conductor logs `VAULT_UNAVAILABLE` with the specific cause (keychain error, passphrase decryption error, `secrets.age` not found) and exits. It does not retry, does not start in degraded mode, and does not serve requests. `maistro vault recover` provides a guided recovery flow.
 
 ## Verification
 
@@ -154,3 +159,5 @@ All vault mutations require admin signature (S-142) and are recorded as VCs in t
 - Headless test: set up a Linux server with no D-Bus session; verify the passphrase-fallback mode works end-to-end.
 - Rotation test: rotate `openai_api_key`; verify old value is unavailable after grace period; verify VC for the rotation is in the audit log.
 - Setup wizard test: attempt to skip vault backup step without explicitly acknowledging; verify wizard does not advance.
+- Vault-unavailable test: with conductor stopped, delete the OS keychain entry and the passphrase fallback file; attempt to start conductor; verify process exits with `VAULT_UNAVAILABLE` error and recovery instructions; verify no requests were served and no partial vault state exists.
+- Bouncer prefix test: add a credential with value `sk-test-ABCDEF0000`; craft a prompt-injection that outputs the full value; verify Bouncer blocks it. Craft a prompt that outputs only 7 characters of the value; verify whether Bouncer blocks at the configured prefix length (8 bytes) — output must not include the full credential regardless.
